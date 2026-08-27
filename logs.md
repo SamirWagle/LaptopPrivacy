@@ -27,3 +27,4 @@
 - Generated desktop PNG/ICNS/ICO assets; removed generated Android/iOS icons because product scope is desktop-only.
 - Final unsigned macOS `.app` bundle rebuilt successfully after formatting, UI refresh fix, and platform ownership review.
 - Parallel validation found test temp-path collision from coarse clock resolution; replaced clock suffix with atomic per-process IDs. Raw Cargo rerun: 9/9 pass. Clippy with warnings denied: pass.
+- Committed as `a665653`, pushed `feat/privacy-aperture-foundation`, and opened PR #1 against `main`. GitHub reports zero configured check runs; no merge performed.
