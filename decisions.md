@@ -21,3 +21,21 @@
 - Detect each display independently and show unsupported/error states. External monitor DDC/MCCS support varies; never claim control without successful read/write.
 - Brightness preview captures current values, applies target for three seconds, then restores. Immediate restore remains available.
 - Expand config from v1 to v2 with hardware fields. Read v1 safely and migrate in memory; reject unknown future versions.
+
+## 2026-08-28 — macOS automatic hardware brightness
+
+- Stack `feat/macos-automatic-brightness` on foundation PR #1; keep one reviewable feature per branch and never merge or push directly to `main`.
+- Use native `NSWorkspace` foreground/running-application APIs through Objective-C runtime FFI. Avoid shell polling, Accessibility permission, and new Rust dependencies.
+- Poll foreground bundle identity every 150 ms. This stays below 250 ms activation target while avoiding app-title, window-title, URL, or content access.
+- Treat hardware control as same physical brightness level changed by macOS display keys. Capture original level once when automatic protection begins, update target without recapturing, and restore on focus loss, pause, error, or normal exit.
+- Manual apply and three-second preview temporarily own brightness session. Automatic rules resume after temporary session ends; user can pause protection for persistent emergency restore.
+- Maximum privacy chooses 10% hardware brightness. Normal automatic mode uses user-selected 10–100% hardware level; rule visibility remains overlay percentage for later overlay branch.
+
+## 2026-08-28 — macOS app-window overlays
+
+- Correct first overlay implementation after live user review: application rules dim only visible windows owned by matched foreground process, never every display.
+- Hardware brightness remains physically panel-wide, like macOS F1/F2 keys. Keep it optional and off by default; UI states that it cannot target one app.
+- Resolve overlay regions from CoreGraphics owner PID, layer, alpha, and bounds only. Never request or read window titles, content, URLs, or Accessibility text.
+- Use one raw Tauri native window per visible target-app window. No overlay webview. Windows remain black, click-through, non-focusable, above ordinary windows, hidden from task switching, and visible across workspaces.
+- Enable Tauri `unstable` only for raw native `WindowBuilder`; do not enable `macos-private-api`. Set public `NSWindow.alphaValue` through Objective-C runtime for opacity.
+- Recalculate window regions on existing 150 ms foreground loop so moves, resizes, focus loss, and visible-window changes update or clear overlays.

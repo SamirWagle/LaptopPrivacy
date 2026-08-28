@@ -106,6 +106,7 @@ h2 { font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
 .mock-layout b { height: 5px; border-radius: 4px; background: #ccd2d8; }
 .mock-layout b:nth-child(2) { width: 76%; }.mock-layout b:nth-child(3) { width: 88%; }
 .aperture-shutter { position: absolute; inset: 0; pointer-events: none; }
+.protected-preview .aperture-shutter { background: #080a0d; transition: opacity 150ms ease; }
 .aperture-shutter::before, .aperture-shutter::after, .aperture-shutter i::before, .aperture-shutter i::after { content: ""; position: absolute; inset: -25%; opacity: .04; background: #080a0d; transform-origin: center; }
 .aperture-shutter::before { clip-path: polygon(0 0, 55% 0, 46% 50%, 0 65%); }
 .aperture-shutter::after { clip-path: polygon(100% 0, 55% 0, 54% 50%, 100% 65%); }
@@ -117,6 +118,8 @@ h2 { font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
 .context-row div, .status-heading div, .status-card.compact > div { display: flex; flex-direction: column; }
 .context-row small, .status-card small { color: var(--muted); font-size: 9px; }
 .context-row strong, .status-card strong { margin-top: 2px; font-size: 12px; }
+.compact-actions { align-items: flex-end; gap: 4px; }
+.context-row code { margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .pill { display: inline-flex; align-items: center; width: max-content; padding: 5px 7px; border-radius: 999px; background: var(--protected-soft); color: var(--protected); font: 8px/1 "IBM Plex Mono", monospace; letter-spacing: .05em; text-transform: uppercase; }
 .pill.neutral { background: var(--surface-soft); color: var(--muted); }.pill.warning { background: var(--warning-soft); color: var(--warning); }
 .status-stack { display: grid; gap: 12px; }
@@ -164,7 +167,7 @@ h2 { font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
 .field-grid { display: grid; grid-template-columns: 1fr 1.2fr; gap: 14px; }
 .rule-form label:not(.check-row), .visibility-field { display: flex; flex-direction: column; gap: 7px; }
 .rule-form label > span, .visibility-field legend { color: var(--ink); font-size: 10px; font-weight: 700; }
-.rule-form input[type="text"], .rule-form input:not([type]), .rule-form input[type="number"], #shortcut { min-height: 38px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.rule-form input[type="text"], .rule-form input:not([type]), .rule-form input[type="number"], .rule-form select, #shortcut { min-height: 38px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 11px; }
 .rule-form label small, .visibility-field > small { color: var(--muted); font-size: 9px; line-height: 1.4; }
 .visibility-field { min-width: 0; margin: 17px 0 0; padding: 0; border: 0; }
 .visibility-field legend { margin-bottom: 8px; padding: 0; }
