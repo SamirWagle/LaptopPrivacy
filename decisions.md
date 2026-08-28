@@ -39,3 +39,12 @@
 - Use one raw Tauri native window per visible target-app window. No overlay webview. Windows remain black, click-through, non-focusable, above ordinary windows, hidden from task switching, and visible across workspaces.
 - Enable Tauri `unstable` only for raw native `WindowBuilder`; do not enable `macos-private-api`. Set public `NSWindow.alphaValue` through Objective-C runtime for opacity.
 - Recalculate window regions on existing 150 ms foreground loop so moves, resizes, focus loss, and visible-window changes update or clear overlays.
+
+## 2026-08-28 — Product README
+
+- Stack `docs-product-readme` on macOS overlay PR #3; keep documentation isolated and never merge or push directly to `main`.
+- Lead with user outcome and app-only dimming distinction. Keep architecture in collapsed secondary section.
+- Use only real repository screenshot and verified runtime claims. No fake download button, release badge, user count, CI status, or signed-installer claim.
+- State current developer-build path because GitHub has no published release. Make signed/notarized macOS DMG first roadmap item because it is current download blocker.
+- Rank roadmap by immediate daily utility: install, menu-bar/Peek recovery, startup/emergency control, browser rules, then platform expansion.
+- Preserve hardware boundary: brightness keys change whole panel; only overlay can dim individual app windows. Never imply ordinary laptop can reproduce Galaxy optical side-view restriction.
