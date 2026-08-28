@@ -42,3 +42,4 @@
 - `npm run build` passed. `cargo clippy --all-targets -- -D warnings` passed. Tauri dev app launched in real desktop session without startup crash and stopped cleanly.
 - Final gates: 10 automated Rust tests passed, 2 hardware/desktop tests remained explicitly ignored in normal CI and passed when run manually, TypeScript passed, formatting passed, and `git diff --check` passed.
 - Built unsigned release `Privacy Aperture.app` successfully with automatic foreground-brightness runtime included.
+- Committed as `ab21a37`, pushed only `feat/macos-automatic-brightness`, and opened stacked PR #2 against foundation branch. No merge or direct `main` push performed.
