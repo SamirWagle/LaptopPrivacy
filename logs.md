@@ -52,3 +52,9 @@
 - Final overlay gates: 12 automated tests passed, TypeScript build passed, clippy with warnings denied passed, formatting/diff checks passed, and unsigned release `.app` built.
 - Started current-app overlay preview, terminated desktop runtime while overlay active, and verified Privacy Aperture plus Vite processes exited with no stuck overlay.
 - Committed as `45666f6`, pushed only `feat/macos-native-overlays`, and opened stacked PR #3 against PR #2 branch. No merge or direct `main` push performed.
+- Created stacked branch `docs-product-readme` from clean macOS overlay PR #3 head; `main` remained untouched.
+- Queried existing Graphify map for implemented rule, storage, matching, and message-validation boundaries; verified user-facing claims against current source and validation log.
+- Confirmed GitHub has no published release and inspected real dark-mode settings screenshot before README use.
+- Rebuilt README as product page: outcome-led hero, screenshot, app-only versus panel-wide explanation, verified capability/status tables, privacy promise, honest source-build CTA, compact architecture, and prioritized feature roadmap.
+- GitHub Markdown API accepted README in repository context; referenced icon and screenshot files exist.
+- Documentation branch validation passed: TypeScript type-check, 12 automated Rust tests, zero failures, 2 expected ignored GUI/hardware tests, and `git diff --check`.
