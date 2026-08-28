@@ -42,6 +42,20 @@ interface BrightnessStatus {
   message: string;
 }
 
+interface ForegroundApplication {
+  platform_app_id: string;
+  display_name: string;
+}
+
+interface ProtectionStatus {
+  foreground_supported: boolean;
+  foreground_app: ForegroundApplication | null;
+  matched_rule_id: string | null;
+  matched_visibility_percent: number | null;
+  hardware_active: boolean;
+  message: string;
+}
+
 const defaultConfig: AppConfig = {
   config_version: 2,
   enabled: true,
@@ -65,6 +79,15 @@ const state = {
   previewVisibility: 34,
   brightness: { supported: false, displays: [], message: "Checking hardware brightness support…" } as BrightnessStatus,
   hardwareActive: false,
+  protection: {
+    foreground_supported: false,
+    foreground_app: null,
+    matched_rule_id: null,
+    matched_visibility_percent: null,
+    hardware_active: false,
+    message: "Starting foreground protection…",
+  } as ProtectionStatus,
+  runningApplications: [] as ForegroundApplication[],
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -95,6 +118,7 @@ function navItem(page: Page, label: string): string {
 }
 
 function shell(content: string): string {
+  const adapterReady = state.protection.foreground_supported;
   return `<div class="app-shell">
     <aside class="sidebar" aria-label="Main navigation">
       <div class="brand" aria-label="Privacy Aperture">
@@ -108,8 +132,8 @@ function shell(content: string): string {
         ${navItem("settings", "Settings")}
       </nav>
       <div class="rail-status">
-        <span class="status-dot warning" aria-hidden="true"></span>
-        <span><b>Setup mode</b><small>Overlay adapter pending</small></span>
+        <span class="status-dot ${adapterReady ? "" : "warning"}" aria-hidden="true"></span>
+        <span><b>${adapterReady ? "Foreground active" : "Setup mode"}</b><small>${adapterReady ? "Hardware automation ready" : "Platform adapter pending"}</small></span>
       </div>
     </aside>
     <main class="main-panel">${content}</main>
@@ -127,11 +151,18 @@ function pageHeader(eyebrow: string, title: string, description: string, action 
 
 function protectionPage(): string {
   const enabled = state.config.enabled;
+  const foreground = state.protection.foreground_app;
+  const matched = state.protection.matched_rule_id !== null;
+  const visibility = state.protection.matched_visibility_percent ?? 100;
+  const matchedRuleLabel = state.config.app_rules.find((rule) => rule.id === state.protection.matched_rule_id)?.display_name
+    ?? state.config.site_rules.find((rule) => rule.id === state.protection.matched_rule_id)?.hostname
+    ?? state.protection.matched_rule_id
+    ?? "rule";
   return `${pageHeader(
     "Live protection",
-    enabled ? "Protection is ready" : "Protection is paused",
+    enabled ? matched ? "Sensitive context protected" : "Protection is watching" : "Protection is paused",
     enabled
-      ? "Rules are active. Native dimming starts when platform adapter is installed."
+      ? state.protection.message
       : "No rule can dim your displays while protection is paused.",
     `<button class="power-button ${enabled ? "enabled" : ""}" id="toggle-protection" aria-pressed="${enabled}">
       <span class="power-icon" aria-hidden="true"></span>${enabled ? "Pause" : "Enable"}
@@ -140,23 +171,23 @@ function protectionPage(): string {
   <section class="protection-grid">
     <article class="aperture-card">
       <div class="card-label"><span>Current display</span><span class="mono">LIVE</span></div>
-      <div class="screen-preview idle" aria-label="Display preview: no protected context active">
+      <div class="screen-preview ${matched ? "protected-preview" : "idle"}" aria-label="Display preview: ${matched ? `${visibility}% visibility` : "no protected context active"}">
         <div class="mock-window">
           <div class="mock-top"><i></i><i></i><i></i></div>
           <div class="mock-layout"><span></span><div><b></b><b></b><b></b></div></div>
         </div>
-        <div class="aperture-shutter"><i></i></div>
-        <span class="screen-state">Clear</span>
+        <div class="aperture-shutter" style="opacity:${matched ? (100 - visibility) / 100 : 0}"><i></i></div>
+        <span class="screen-state">${matched ? `${visibility}% visible` : "Clear"}</span>
       </div>
       <div class="context-row">
-        <span class="context-icon" aria-hidden="true">—</span>
-        <div><small>Foreground context</small><strong>Waiting for native adapter</strong></div>
-        <span class="pill neutral">No match</span>
+        <span class="context-icon" aria-hidden="true">${matched ? "✓" : "—"}</span>
+        <div><small>Foreground context</small><strong>${foreground ? escapeHtml(foreground.display_name) : state.protection.foreground_supported ? "No identified application" : "Adapter unavailable"}</strong>${foreground ? `<code>${escapeHtml(foreground.platform_app_id)}</code>` : ""}</div>
+        <span class="pill ${matched ? "" : "neutral"}">${matched ? escapeHtml("Matched: " + matchedRuleLabel) : "No match"}</span>
       </div>
     </article>
     <div class="status-stack">
       <article class="status-card">
-        <div class="status-heading"><span class="status-symbol protected" aria-hidden="true">✓</span><div><small>Rules engine</small><strong>Ready</strong></div></div>
+        <div class="status-heading"><span class="status-symbol protected" aria-hidden="true">✓</span><div><small>Rules engine</small><strong>${state.protection.hardware_active ? "Hardware dim active" : "Ready"}</strong></div></div>
         <p>${state.config.app_rules.length + state.config.site_rules.length} local rule${state.config.app_rules.length + state.config.site_rules.length === 1 ? "" : "s"} configured</p>
       </article>
       <article class="status-card">
@@ -191,7 +222,7 @@ function applicationsPage(): string {
     <div class="rule-head"><span>${rules.length} application${rules.length === 1 ? "" : "s"}</span><span>Visibility</span><span>Status</span><span></span></div>
     ${rules.length ? rules.map(appRuleRow).join("") : emptyState("app")}
   </section>
-  <p class="footnote"><span aria-hidden="true">ⓘ</span> Stable platform identifiers are stored locally. Running-app picker arrives with native foreground adapter.</p>`;
+  <p class="footnote"><span aria-hidden="true">ⓘ</span> Stable platform identifiers are stored locally. macOS running applications are read only while this screen is open.</p>`;
 }
 
 function appRuleRow(rule: AppRule): string {
@@ -247,6 +278,7 @@ function appForm(): string {
   const rule = currentAppRule();
   return `<form class="rule-form" id="app-form">
     <div class="form-title"><div><p class="eyebrow">${rule ? "Edit rule" : "New rule"}</p><h2>${rule ? "Update application" : "Add application"}</h2></div><button type="button" class="icon-button" data-cancel aria-label="Close form">×</button></div>
+    ${!rule && state.runningApplications.length ? `<label><span>Running application</span><select id="running-application"><option value="">Choose current app…</option>${state.runningApplications.map((app) => `<option value="${escapeHtml(app.platform_app_id)}">${escapeHtml(app.display_name)} — ${escapeHtml(app.platform_app_id)}</option>`).join("")}</select></label>` : ""}
     <div class="field-grid">
       <label><span>Application name</span><input name="display_name" maxlength="160" required value="${escapeHtml(rule?.display_name ?? "")}" placeholder="Finance workspace"></label>
       <label><span>Platform identifier</span><input class="mono" name="platform_app_id" maxlength="512" required value="${escapeHtml(rule?.platform_app_id ?? "")}" placeholder="com.company.application"><small>Bundle ID on macOS; executable identity on Windows/Linux.</small></label>
@@ -280,7 +312,7 @@ function settingsPage(): string {
   return `${pageHeader("Preferences", "Settings", "System behavior and recovery controls. Theme follows your operating system.")}
   <section class="settings-section hardware-section">
     <div class="section-heading"><div><p class="eyebrow">Display hardware</p><h2>Privacy brightness</h2></div><span class="pill ${brightness.supported ? "" : "warning"}">${brightness.supported ? "Available" : "Unsupported"}</span></div>
-    <p class="section-copy">Changes physical panel brightness. Supported displays restore when privacy mode ends or app exits normally.</p>
+    <p class="section-copy">Changes same physical panel brightness level as macOS display keys. Supported displays restore when privacy mode ends or app exits normally.</p>
     <div class="hardware-displays">${displays}</div>
     <div class="setting-row inset"><div><strong>Use hardware brightness for protected rules</strong><p>Apply selected level when an application or website rule matches.</p></div><label class="switch"><input id="hardware-enabled" type="checkbox" ${state.config.hardware_brightness_enabled ? "checked" : ""} ${brightnessControlsDisabled} aria-label="Use hardware brightness"><span></span></label></div>
     <fieldset class="hardware-level" ${brightnessControlsDisabled}><legend>Privacy brightness</legend><div class="range-wrap"><input id="hardware-range" type="range" min="10" max="100" value="${state.config.privacy_brightness_percent}" aria-label="Hardware privacy brightness percentage"><div class="number-suffix"><input class="mono" id="hardware-number" type="number" min="10" max="100" value="${state.config.privacy_brightness_percent}" aria-label="Hardware privacy brightness percentage"><span>%</span></div></div></fieldset>
@@ -302,7 +334,7 @@ function settingsPage(): string {
     <div class="setting-row"><div><strong>Theme</strong><p>Uses system light or dark appearance.</p></div><span class="setting-value">System</span></div>
   </section>
   <section class="settings-section"><h2>Connection</h2><div class="connection-card"><span class="status-symbol warning" aria-hidden="true">↗</span><div><strong>Chromium extension disconnected</strong><p>Native host registration ships with browser-integration milestone.</p></div><span class="pill warning">Offline</span></div></section>
-  <section class="settings-section"><h2>Platform support</h2><div class="support-grid"><div><span>macOS 13+</span><strong class="warning-text">Brightness ready; overlay pending</strong></div><div><span>Windows 10/11</span><strong>Brightness code; hardware QA pending</strong></div><div><span>Linux X11</span><strong>Backlight code; hardware QA pending</strong></div><div><span>Linux Wayland</span><strong>Brightness only</strong></div></div></section>
+  <section class="settings-section"><h2>Platform support</h2><div class="support-grid"><div><span>macOS 13+</span><strong>Automatic hardware brightness ready; overlay pending</strong></div><div><span>Windows 10/11</span><strong>Brightness code; hardware QA pending</strong></div><div><span>Linux X11</span><strong>Backlight code; hardware QA pending</strong></div><div><span>Linux Wayland</span><strong>Brightness only</strong></div></div></section>
   <section class="settings-section privacy-copy"><h2>Privacy</h2><p>Privacy Aperture stores rules and preferences on this device. It has no account, analytics, telemetry, or network service. It never stores activity history, page content, titles, or full URLs.</p><p>It reduces casual shoulder-surfing; it cannot stop cameras, screenshots, or close viewing.</p></section>`;
 }
 
@@ -311,7 +343,7 @@ function onboarding(): string {
   const copy = [
     ["Sensitive apps dim when you open them.", "Privacy Aperture watches current foreground identity locally, matches your rules, then dims every display together."],
     ["Choose how much stays visible.", "Move control to close aperture. Lower visibility creates darker protection."],
-    ["Add your first application.", "Choose a running app once native adapter is installed. Until then, add its stable platform ID from Applications."],
+    ["Add your first application.", "Choose a running macOS app. Privacy Aperture stores only its stable bundle identifier and rule."],
     ["Protect browser hostnames.", "Chromium extension sends active hostname only. It never reads page content, titles, paths, or history."],
     ["Keep recovery close.", "Emergency shortcut removes all overlays immediately. You can change it later in Settings."],
   ][step - 1];
@@ -356,14 +388,23 @@ function setPage(page: Page): void {
   render();
 }
 
+async function openAddForm(kind: "app" | "site"): Promise<void> {
+  state.editingId = null;
+  if (kind === "app") {
+    try {
+      state.runningApplications = await invoke<ForegroundApplication[]>("list_running_applications");
+    } catch {
+      state.runningApplications = [];
+    }
+  }
+  state.addKind = kind;
+  render();
+  document.querySelector<HTMLElement>(kind === "app" && state.runningApplications.length ? "#running-application" : ".rule-form input")?.focus();
+}
+
 function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-page]").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page as Page)));
-  document.querySelectorAll<HTMLButtonElement>("[data-add]").forEach((button) => button.addEventListener("click", () => {
-    state.addKind = button.dataset.add as "app" | "site";
-    state.editingId = null;
-    render();
-    document.querySelector<HTMLElement>(".rule-form input")?.focus();
-  }));
+  document.querySelectorAll<HTMLButtonElement>("[data-add]").forEach((button) => button.addEventListener("click", () => void openAddForm(button.dataset.add as "app" | "site")));
   document.querySelectorAll<HTMLButtonElement>("[data-cancel]").forEach((button) => button.addEventListener("click", () => {
     state.addKind = null;
     state.editingId = null;
@@ -391,6 +432,15 @@ function bindEvents(): void {
   bindRangePairs();
   document.querySelector<HTMLFormElement>("#app-form")?.addEventListener("submit", saveAppRule);
   document.querySelector<HTMLFormElement>("#site-form")?.addEventListener("submit", saveSiteRule);
+  document.querySelector<HTMLSelectElement>("#running-application")?.addEventListener("change", (event) => {
+    const selected = state.runningApplications.find((app) => app.platform_app_id === (event.currentTarget as HTMLSelectElement).value);
+    const form = document.querySelector<HTMLFormElement>("#app-form");
+    if (!selected || !form) return;
+    const name = form.elements.namedItem("display_name") as HTMLInputElement | null;
+    const identifier = form.elements.namedItem("platform_app_id") as HTMLInputElement | null;
+    if (name) name.value = selected.display_name;
+    if (identifier) identifier.value = selected.platform_app_id;
+  });
   document.querySelector<HTMLButtonElement>("#toggle-protection")?.addEventListener("click", () => {
     state.config.enabled = !state.config.enabled;
     void persist(state.config.enabled ? "Protection enabled" : "Protection paused");
@@ -499,6 +549,24 @@ async function refreshBrightness(renderAfter = true): Promise<void> {
   if (renderAfter) render();
 }
 
+async function refreshProtection(renderAfter = true): Promise<void> {
+  try {
+    const next = await invoke<ProtectionStatus>("get_protection_status");
+    const changed = JSON.stringify(next) !== JSON.stringify(state.protection);
+    state.protection = next;
+    if (renderAfter && changed && state.page === "protection" && !state.onboardingStep) render();
+  } catch {
+    state.protection = {
+      foreground_supported: false,
+      foreground_app: null,
+      matched_rule_id: null,
+      matched_visibility_percent: null,
+      hardware_active: false,
+      message: "Foreground protection requires desktop app",
+    };
+  }
+}
+
 function bindRangePairs(): void {
   document.querySelectorAll<HTMLElement>(".visibility-field").forEach((field) => {
     const range = field.querySelector<HTMLInputElement>('[name="visibility_range"]');
@@ -596,7 +664,9 @@ async function boot(): Promise<void> {
     }
   }
   await refreshBrightness(false);
+  await refreshProtection(false);
   render();
+  window.setInterval(() => void refreshProtection(), 500);
 }
 
 void boot();

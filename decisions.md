@@ -21,3 +21,12 @@
 - Detect each display independently and show unsupported/error states. External monitor DDC/MCCS support varies; never claim control without successful read/write.
 - Brightness preview captures current values, applies target for three seconds, then restores. Immediate restore remains available.
 - Expand config from v1 to v2 with hardware fields. Read v1 safely and migrate in memory; reject unknown future versions.
+
+## 2026-08-28 — macOS automatic hardware brightness
+
+- Stack `feat/macos-automatic-brightness` on foundation PR #1; keep one reviewable feature per branch and never merge or push directly to `main`.
+- Use native `NSWorkspace` foreground/running-application APIs through Objective-C runtime FFI. Avoid shell polling, Accessibility permission, and new Rust dependencies.
+- Poll foreground bundle identity every 150 ms. This stays below 250 ms activation target while avoiding app-title, window-title, URL, or content access.
+- Treat hardware control as same physical brightness level changed by macOS display keys. Capture original level once when automatic protection begins, update target without recapturing, and restore on focus loss, pause, error, or normal exit.
+- Manual apply and three-second preview temporarily own brightness session. Automatic rules resume after temporary session ends; user can pause protection for persistent emergency restore.
+- Maximum privacy chooses 10% hardware brightness. Normal automatic mode uses user-selected 10–100% hardware level; rule visibility remains overlay percentage for later overlay branch.

@@ -1,4 +1,8 @@
 use serde::Serialize;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct BrightnessDisplay {
@@ -16,6 +20,133 @@ pub struct BrightnessStatus {
 }
 
 pub(crate) use platform::Snapshot;
+
+#[derive(Clone, Default)]
+pub struct BrightnessControl(Arc<ControlInner>);
+
+#[derive(Default)]
+struct ControlInner {
+    generation: AtomicU64,
+    state: Mutex<ControlState>,
+}
+
+#[derive(Default)]
+struct ControlState {
+    snapshot: Option<Snapshot>,
+    mode: Option<ControlMode>,
+}
+
+enum ControlMode {
+    Automatic { rule_id: String, percent: u8 },
+    Manual,
+    Preview(u64),
+}
+
+impl BrightnessControl {
+    pub fn preview(&self, percent: u8) -> Result<BrightnessStatus, String> {
+        let generation = self.0.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let status = self.begin(percent, ControlMode::Preview(generation))?;
+        let control = self.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let _ = control.restore_preview(generation);
+        });
+        Ok(BrightnessStatus {
+            message: "Hardware brightness preview active for three seconds".into(),
+            ..status
+        })
+    }
+
+    pub fn apply_manual(&self, percent: u8) -> Result<BrightnessStatus, String> {
+        self.0.generation.fetch_add(1, Ordering::SeqCst);
+        self.begin(percent, ControlMode::Manual)
+    }
+
+    pub fn reconcile_automatic(&self, rule_id: String, percent: u8) -> Result<bool, String> {
+        validate_percent(percent)?;
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| "brightness state is unavailable")?;
+        match state.mode.as_ref() {
+            Some(ControlMode::Preview(_)) | Some(ControlMode::Manual) => return Ok(false),
+            Some(ControlMode::Automatic {
+                rule_id: current_rule,
+                percent: current_percent,
+            }) if current_rule == &rule_id && *current_percent == percent => return Ok(true),
+            _ => {}
+        }
+        if let Some(snapshot) = state.snapshot.as_ref() {
+            set(snapshot, percent)?;
+        } else {
+            let (_, snapshot) = apply(percent)?;
+            state.snapshot = Some(snapshot);
+        }
+        state.mode = Some(ControlMode::Automatic { rule_id, percent });
+        Ok(true)
+    }
+
+    pub fn clear_automatic(&self) -> Result<bool, String> {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| "brightness state is unavailable")?;
+        if matches!(state.mode, Some(ControlMode::Automatic { .. })) {
+            restore_state(&mut state)?;
+        }
+        Ok(false)
+    }
+
+    pub fn cancel(&self) -> Result<(), String> {
+        self.0.generation.fetch_add(1, Ordering::SeqCst);
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| "brightness state is unavailable")?;
+        restore_state(&mut state)
+    }
+
+    fn begin(&self, percent: u8, mode: ControlMode) -> Result<BrightnessStatus, String> {
+        validate_percent(percent)?;
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| "brightness state is unavailable")?;
+        restore_state(&mut state)?;
+        let (status, snapshot) = apply(percent)?;
+        state.snapshot = Some(snapshot);
+        state.mode = Some(mode);
+        Ok(status)
+    }
+
+    fn restore_preview(&self, generation: u64) -> Result<(), String> {
+        if self.0.generation.load(Ordering::SeqCst) != generation {
+            return Ok(());
+        }
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| "brightness state is unavailable")?;
+        if matches!(state.mode, Some(ControlMode::Preview(value)) if value == generation) {
+            restore_state(&mut state)?;
+        }
+        Ok(())
+    }
+}
+
+fn restore_state(state: &mut ControlState) -> Result<(), String> {
+    if let Some(snapshot) = state.snapshot.as_ref() {
+        restore(snapshot)?;
+    }
+    state.snapshot = None;
+    state.mode = None;
+    Ok(())
+}
 
 pub fn status() -> BrightnessStatus {
     match platform::snapshot() {
@@ -48,10 +179,28 @@ pub(crate) fn apply(percent: u8) -> Result<(BrightnessStatus, Snapshot), String>
         BrightnessStatus {
             supported: true,
             displays,
-            message: "Hardware brightness preview active for three seconds".into(),
+            message: "Hardware brightness applied".into(),
         },
         snapshot,
     ))
+}
+
+fn set(snapshot: &Snapshot, percent: u8) -> Result<BrightnessStatus, String> {
+    validate_percent(percent)?;
+    platform::set(snapshot, percent)?;
+    let displays = snapshot
+        .displays()
+        .into_iter()
+        .map(|mut display| {
+            display.brightness_percent = percent;
+            display
+        })
+        .collect();
+    Ok(BrightnessStatus {
+        supported: true,
+        displays,
+        message: "Hardware brightness applied".into(),
+    })
 }
 
 pub(crate) fn restore(snapshot: &Snapshot) -> Result<(), String> {
@@ -644,5 +793,23 @@ mod tests {
         assert!(validate_percent(9).is_err());
         assert!(validate_percent(10).is_ok());
         assert!(validate_percent(100).is_ok());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "changes physical display brightness briefly"]
+    fn automatic_control_changes_and_restores_panel_level() {
+        let original = status().displays[0].brightness_percent;
+        assert!(original > 10, "display already at minimum test level");
+        let target = original.saturating_sub(10).max(10);
+        let control = BrightnessControl::default();
+        assert!(control
+            .reconcile_automatic("hardware-test".into(), target)
+            .unwrap());
+        let changed = status().displays[0].brightness_percent;
+        assert!(changed.abs_diff(target) <= 2);
+        control.cancel().unwrap();
+        let restored = status().displays[0].brightness_percent;
+        assert!(restored.abs_diff(original) <= 8);
     }
 }
