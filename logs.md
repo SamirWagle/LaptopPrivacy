@@ -51,3 +51,4 @@
 - Running both ignored macOS desktop tests concurrently produced empty native enumerations. Re-ran each serially; foreground/window-bounds and physical brightness/restore tests both passed.
 - Final overlay gates: 12 automated tests passed, TypeScript build passed, clippy with warnings denied passed, formatting/diff checks passed, and unsigned release `.app` built.
 - Started current-app overlay preview, terminated desktop runtime while overlay active, and verified Privacy Aperture plus Vite processes exited with no stuck overlay.
+- Committed as `45666f6`, pushed only `feat/macos-native-overlays`, and opened stacked PR #3 against PR #2 branch. No merge or direct `main` push performed.
