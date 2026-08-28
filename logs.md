@@ -43,3 +43,12 @@
 - Final gates: 10 automated Rust tests passed, 2 hardware/desktop tests remained explicitly ignored in normal CI and passed when run manually, TypeScript passed, formatting passed, and `git diff --check` passed.
 - Built unsigned release `Privacy Aperture.app` successfully with automatic foreground-brightness runtime included.
 - Committed as `ab21a37`, pushed only `feat/macos-automatic-brightness`, and opened stacked PR #2 against foundation branch. No merge or direct `main` push performed.
+- Created stacked branch `feat/macos-native-overlays` from PR #2 head.
+- First live overlay used display bounds; user correctly rejected it because unrelated apps also dimmed. Stopped runtime immediately and replaced display-wide geometry.
+- Added CoreGraphics visible-window discovery keyed only by foreground process ID. No window title/content lookup and no Accessibility permission.
+- Live Notes acceptance: native overlay position and size exactly matched Notes window; surrounding desktop stayed outside overlay region.
+- Test created one temporary Notes rule. Removed exactly that rule afterward; local config returned to zero app rules.
+- Running both ignored macOS desktop tests concurrently produced empty native enumerations. Re-ran each serially; foreground/window-bounds and physical brightness/restore tests both passed.
+- Final overlay gates: 12 automated tests passed, TypeScript build passed, clippy with warnings denied passed, formatting/diff checks passed, and unsigned release `.app` built.
+- Started current-app overlay preview, terminated desktop runtime while overlay active, and verified Privacy Aperture plus Vite processes exited with no stuck overlay.
+- Committed as `45666f6`, pushed only `feat/macos-native-overlays`, and opened stacked PR #3 against PR #2 branch. No merge or direct `main` push performed.
