@@ -58,3 +58,4 @@
 - Rebuilt README as product page: outcome-led hero, screenshot, app-only versus panel-wide explanation, verified capability/status tables, privacy promise, honest source-build CTA, compact architecture, and prioritized feature roadmap.
 - GitHub Markdown API accepted README in repository context; referenced icon and screenshot files exist.
 - Documentation branch validation passed: TypeScript type-check, 12 automated Rust tests, zero failures, 2 expected ignored GUI/hardware tests, and `git diff --check`.
+- Committed product README as `024f68b`, pushed only `docs-product-readme`, and opened stacked PR #5 against `feat/macos-native-overlays`. GitHub reports PR open and mergeable with zero configured checks; no merge or direct `main` push performed.
