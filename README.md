@@ -2,11 +2,11 @@
 
 Local-first laptop privacy dimmer. Sensitive apps and websites can combine real hardware brightness reduction with click-through black overlays.
 
-Current branch delivers repository foundation, tested policy/config core, hardware brightness control, and complete vanilla TypeScript control UI. Native foreground and overlay adapters remain next milestone; UI labels unsupported runtime honestly.
+Current stacked branch adds automatic macOS foreground-app protection to repository foundation. Matching app rules now change real panel brightness and restore captured level when focus leaves. Native overlays, browser integration, and Windows/Linux foreground automation remain separate milestones.
 
 ## Hardware behavior
 
-- macOS: public IOKit first, then direct-distribution `DisplayServices` fallback for built-in Apple panels.
+- macOS: public IOKit first, then direct-distribution `DisplayServices` fallback for built-in Apple panels. This changes same hardware level as display brightness keys; automatic rules poll native foreground bundle ID every 150 ms.
 - Windows: Monitor Configuration API/MCCS. Monitor support varies and needs physical QA.
 - Linux: kernel `/sys/class/backlight` interface. Write permissions depend on distribution policy.
 - External displays: detected per panel; unsupported DDC/MCCS hardware remains unchanged.
@@ -28,5 +28,5 @@ npm run tauri dev
 - No account, cloud, telemetry, page content, browsing history, titles, or full URLs.
 - Config contains user-created application IDs, hostnames, and visibility levels only.
 - Active context remains memory-only and clears on disconnect.
-- Hardware preview lasts three seconds and restores captured brightness. Manual mode offers explicit restore and restores on normal app exit.
+- Hardware preview lasts three seconds and restores captured brightness. Manual mode offers explicit restore. Automatic app rules capture once, apply configured 10–100% hardware level, then restore on focus loss, pause, error, or normal exit.
 - Product reduces casual shoulder-surfing. It cannot stop cameras, screenshots, close viewing, or replace a physical privacy filter.

@@ -28,3 +28,18 @@
 - Final unsigned macOS `.app` bundle rebuilt successfully after formatting, UI refresh fix, and platform ownership review.
 - Parallel validation found test temp-path collision from coarse clock resolution; replaced clock suffix with atomic per-process IDs. Raw Cargo rerun: 9/9 pass. Clippy with warnings denied: pass.
 - Committed as `a665653`, pushed `feat/privacy-aperture-foundation`, and opened PR #1 against `main`. GitHub reports zero configured check runs; no merge performed.
+
+## 2026-08-28
+
+- Created stacked branch `feat/macos-automatic-brightness` from clean foundation head `e6790fd`; `main` remained untouched.
+- Added native macOS foreground and running-app discovery using bundle identifiers only. No Accessibility permission, activity history, titles, URLs, or content capture.
+- Added 150 ms protection loop connecting foreground app rules to real hardware brightness level, with captured-original restore on focus loss, pause, error, and exit.
+- Added shared automatic/manual/three-second-preview brightness ownership so target changes do not overwrite original restore level.
+- Added current foreground/matched-rule UI state and running-application picker.
+- Graphify code-only map: 5 Rust files, 77 nodes, 126 edges, 11 communities; generated output stays ignored.
+- Live macOS foreground/running-app acceptance passed.
+- Live hardware acceptance reduced physical panel brightness by 10 percentage points and restored captured level; ignored test passed.
+- `npm run build` passed. `cargo clippy --all-targets -- -D warnings` passed. Tauri dev app launched in real desktop session without startup crash and stopped cleanly.
+- Final gates: 10 automated Rust tests passed, 2 hardware/desktop tests remained explicitly ignored in normal CI and passed when run manually, TypeScript passed, formatting passed, and `git diff --check` passed.
+- Built unsigned release `Privacy Aperture.app` successfully with automatic foreground-brightness runtime included.
+- Committed as `ab21a37`, pushed only `feat/macos-automatic-brightness`, and opened stacked PR #2 against foundation branch. No merge or direct `main` push performed.
