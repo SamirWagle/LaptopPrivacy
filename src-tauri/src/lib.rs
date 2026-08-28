@@ -1,6 +1,7 @@
 pub mod brightness;
 pub mod domain;
 pub mod foreground;
+pub mod overlay;
 pub mod protection;
 pub mod storage;
 
@@ -74,11 +75,34 @@ fn list_running_applications() -> Result<Vec<foreground::ForegroundApplication>,
     foreground::running()
 }
 
+#[tauri::command]
+fn preview_privacy_overlay(
+    state: tauri::State<'_, protection::ProtectionRuntime>,
+    visibility_percent: u8,
+) -> Result<(), String> {
+    state.preview_overlay(visibility_percent)
+}
+
+#[tauri::command]
+fn cancel_privacy_overlay_preview(
+    state: tauri::State<'_, protection::ProtectionRuntime>,
+) -> Result<(), String> {
+    state.cancel_overlay_preview()
+}
+
+#[tauri::command]
+fn remove_all_dimming(
+    state: tauri::State<'_, protection::ProtectionRuntime>,
+) -> Result<(), String> {
+    state.remove_all_dimming()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .setup(|app| {
-            let runtime = protection::ProtectionRuntime::new(AppConfig::default());
+            let runtime =
+                protection::ProtectionRuntime::new(AppConfig::default(), app.handle().clone());
             runtime.start();
             app.manage(runtime);
             Ok(())
@@ -91,7 +115,10 @@ pub fn run() {
             apply_hardware_brightness,
             cancel_hardware_brightness_preview,
             get_protection_status,
-            list_running_applications
+            list_running_applications,
+            preview_privacy_overlay,
+            cancel_privacy_overlay_preview,
+            remove_all_dimming
         ])
         .build(tauri::generate_context!())
         .expect("error while building Privacy Aperture");

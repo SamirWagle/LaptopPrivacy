@@ -2,6 +2,7 @@ use crate::{
     brightness::BrightnessControl,
     domain::{self, AppConfig, ForegroundContext},
     foreground::{self, ForegroundApplication},
+    overlay::OverlayControl,
 };
 use serde::Serialize;
 use std::sync::{
@@ -18,6 +19,7 @@ pub struct ProtectionStatus {
     pub matched_rule_id: Option<String>,
     pub matched_visibility_percent: Option<u8>,
     pub hardware_active: bool,
+    pub overlay_active: bool,
     pub message: String,
 }
 
@@ -29,6 +31,7 @@ impl Default for ProtectionStatus {
             matched_rule_id: None,
             matched_visibility_percent: None,
             hardware_active: false,
+            overlay_active: false,
             message: if foreground::supported() {
                 "Watching current foreground application locally".into()
             } else {
@@ -45,6 +48,7 @@ struct RuntimeInner {
     config: RwLock<AppConfig>,
     status: Mutex<ProtectionStatus>,
     brightness: BrightnessControl,
+    overlay: OverlayControl,
     stopped: AtomicBool,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -57,11 +61,12 @@ struct ProtectionTarget {
 }
 
 impl ProtectionRuntime {
-    pub fn new(config: AppConfig) -> Self {
+    pub fn new(config: AppConfig, app: tauri::AppHandle) -> Self {
         Self(Arc::new(RuntimeInner {
             config: RwLock::new(config),
             status: Mutex::new(ProtectionStatus::default()),
             brightness: BrightnessControl::default(),
+            overlay: OverlayControl::new(app),
             stopped: AtomicBool::new(false),
             worker: Mutex::new(None),
         }))
@@ -128,6 +133,22 @@ impl ProtectionRuntime {
         self.0.brightness.cancel()
     }
 
+    pub fn preview_overlay(&self, visibility_percent: u8) -> Result<(), String> {
+        let app = foreground::current()?
+            .ok_or_else(|| "No foreground application available for preview".to_string())?;
+        let windows = foreground::window_bounds(app.process_id)?;
+        self.0.overlay.preview(visibility_percent, windows)
+    }
+
+    pub fn cancel_overlay_preview(&self) -> Result<(), String> {
+        self.0.overlay.cancel_preview()
+    }
+
+    pub fn remove_all_dimming(&self) -> Result<(), String> {
+        self.0.overlay.clear()?;
+        self.0.brightness.cancel()
+    }
+
     pub fn stop(&self) {
         self.0.stopped.store(true, Ordering::Relaxed);
         if let Ok(mut worker) = self.0.worker.lock() {
@@ -135,6 +156,7 @@ impl ProtectionRuntime {
                 let _ = worker.join();
             }
         }
+        let _ = self.0.overlay.clear();
         let _ = self.0.brightness.cancel();
     }
 
@@ -156,7 +178,7 @@ impl ProtectionRuntime {
         let target = foreground
             .as_ref()
             .and_then(|app| protection_target(&config, app));
-        let result = match target.as_ref().and_then(|target| {
+        let brightness_result = match target.as_ref().and_then(|target| {
             target
                 .hardware_percent
                 .map(|percent| (target.rule_id.clone(), percent))
@@ -164,20 +186,39 @@ impl ProtectionRuntime {
             Some((rule_id, percent)) => self.0.brightness.reconcile_automatic(rule_id, percent),
             None => self.0.brightness.clear_automatic(),
         };
-        let (hardware_active, message) = match result {
-            Ok(active) => (
-                active,
-                if target.is_some() {
-                    if active {
-                        "Protected application matched; hardware brightness reduced".into()
-                    } else {
-                        "Protected application matched".into()
+        let overlay_result = match (target.as_ref(), foreground.as_ref()) {
+            (Some(target), Some(app)) => {
+                foreground::window_bounds(app.process_id).and_then(|windows| {
+                    self.0
+                        .overlay
+                        .reconcile(Some(target.visibility_percent), &windows)
+                })
+            }
+            _ => self.0.overlay.reconcile(None, &[]),
+        };
+        let (hardware_active, overlay_active, message) = match (brightness_result, overlay_result) {
+            (Ok(hardware_active), Ok(overlay_active)) => {
+                let message = if target.is_some() {
+                    match (hardware_active, overlay_active) {
+                        (true, true) => {
+                            "Protected application matched; overlay and hardware brightness active"
+                        }
+                        (true, false) => {
+                            "Protected application matched; hardware brightness active"
+                        }
+                        (false, true) => "Protected application matched; overlay active",
+                        (false, false) => "Protected application matched",
                     }
                 } else {
-                    "No protected application matched".into()
-                },
-            ),
-            Err(error) => (false, error),
+                    "No protected application matched"
+                };
+                (hardware_active, overlay_active, message.into())
+            }
+            (Err(error), Ok(overlay_active)) => (false, overlay_active, error),
+            (Ok(hardware_active), Err(error)) => (hardware_active, false, error),
+            (Err(brightness_error), Err(overlay_error)) => {
+                (false, false, format!("{brightness_error}; {overlay_error}"))
+            }
         };
         if let Ok(mut status) = self.0.status.lock() {
             *status = ProtectionStatus {
@@ -186,6 +227,7 @@ impl ProtectionRuntime {
                 matched_rule_id: target.as_ref().map(|target| target.rule_id.clone()),
                 matched_visibility_percent: target.map(|target| target.visibility_percent),
                 hardware_active,
+                overlay_active,
                 message,
             };
         }
@@ -193,8 +235,10 @@ impl ProtectionRuntime {
 
     fn set_error(&self, message: String) {
         let _ = self.0.brightness.clear_automatic();
+        let _ = self.0.overlay.clear();
         if let Ok(mut status) = self.0.status.lock() {
             status.hardware_active = false;
+            status.overlay_active = false;
             status.message = message;
         }
     }
@@ -213,7 +257,11 @@ fn protection_target(
     )?;
     Some(ProtectionTarget {
         rule_id: matched.rule_id.to_string(),
-        visibility_percent: matched.visibility_percent,
+        visibility_percent: if config.maximum_privacy {
+            10
+        } else {
+            matched.visibility_percent
+        },
         hardware_percent: config
             .hardware_brightness_enabled
             .then_some(if config.maximum_privacy {
@@ -246,6 +294,7 @@ mod tests {
         let app = ForegroundApplication {
             platform_app_id: "com.example.mail".into(),
             display_name: "Mail".into(),
+            process_id: 42,
         };
         assert_eq!(
             protection_target(&config, &app),
@@ -255,17 +304,15 @@ mod tests {
                 hardware_percent: Some(42),
             })
         );
-        assert_eq!(
-            protection_target(
-                &AppConfig {
-                    maximum_privacy: true,
-                    ..config
-                },
-                &app,
-            )
-            .unwrap()
-            .hardware_percent,
-            Some(10)
-        );
+        let maximum = protection_target(
+            &AppConfig {
+                maximum_privacy: true,
+                ..config
+            },
+            &app,
+        )
+        .unwrap();
+        assert_eq!(maximum.hardware_percent, Some(10));
+        assert_eq!(maximum.visibility_percent, 10);
     }
 }
