@@ -75,3 +75,4 @@
 - Initial ignored-test run inside sandbox lacked WindowServer/display access. Re-ran serially with GUI/hardware permission: foreground/window discovery passed; physical brightness change-and-restore passed.
 - Windows cross-check remains environment-blocked before project compilation by missing `x86_64-w64-mingw32-windres`. Linux cross-check remains environment-blocked by absent cross-target GTK/GIO/Pango pkg-config sysroot; no platform runtime claim added.
 - Built unsigned release `Privacy Aperture.app`, launched release runtime successfully, stopped it with normal interrupt, and verified no `privacy-aperture` process remained.
+- Committed all eight review fixes as `6cda97a`, pushed only `fix/review-correctness-blockers`, and opened PR #7 against `main`. GitHub reports PR open and mergeable with zero configured checks; no merge or direct `main` push performed.
