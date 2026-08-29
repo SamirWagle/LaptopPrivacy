@@ -31,8 +31,22 @@ fn save_config(
     state: tauri::State<'_, protection::ProtectionRuntime>,
     config: AppConfig,
 ) -> Result<(), String> {
-    storage::save(&config_path(&app)?, &config)?;
-    state.update_config(config)
+    let path = config_path(&app)?;
+    let previous = state.config()?;
+    storage::save(&path, &config)?;
+    if let Err(error) = state.update_config(config) {
+        let runtime_rollback = state.update_config(previous.clone());
+        let storage_rollback = storage::save(&path, &previous);
+        let mut message = format!("could not activate saved config: {error}");
+        if let Err(rollback) = runtime_rollback {
+            message.push_str(&format!("; runtime rollback failed: {rollback}"));
+        }
+        if let Err(rollback) = storage_rollback {
+            message.push_str(&format!("; storage rollback failed: {rollback}"));
+        }
+        return Err(message);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -92,9 +106,19 @@ fn cancel_privacy_overlay_preview(
 
 #[tauri::command]
 fn remove_all_dimming(
+    app: tauri::AppHandle,
     state: tauri::State<'_, protection::ProtectionRuntime>,
-) -> Result<(), String> {
-    state.remove_all_dimming()
+) -> Result<AppConfig, String> {
+    let cleanup = state.remove_all_dimming();
+    let config = state.config()?;
+    let save = storage::save(&config_path(&app)?, &config);
+    match (cleanup, save) {
+        (Ok(()), Ok(())) => Ok(config),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(cleanup_error), Err(save_error)) => Err(format!(
+            "{cleanup_error}; could not persist emergency pause: {save_error}"
+        )),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

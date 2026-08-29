@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub const CONFIG_VERSION: u32 = 2;
 pub const MESSAGE_VERSION: u32 = 1;
@@ -67,11 +67,18 @@ impl AppConfig {
             return Err("emergency shortcut must contain 1..80 characters".into());
         }
         validate_visibility(self.privacy_brightness_percent)?;
+        let mut application_ids = HashSet::new();
         for rule in &self.app_rules {
             validate_text("application rule id", &rule.id, 128)?;
             validate_text("platform application id", &rule.platform_app_id, 512)?;
             validate_text("application display name", &rule.display_name, 160)?;
             validate_visibility(rule.visibility_percent)?;
+            if !application_ids.insert(rule.platform_app_id.as_str()) {
+                return Err(format!(
+                    "duplicate platform application id: {}",
+                    rule.platform_app_id
+                ));
+            }
         }
         for rule in &self.site_rules {
             validate_text("site rule id", &rule.id, 128)?;
@@ -208,7 +215,8 @@ pub fn evaluate<'a>(
         if let Some(rule) = config
             .site_rules
             .iter()
-            .find(|rule| rule.enabled && hostname_matches(hostname, rule))
+            .filter(|rule| rule.enabled && hostname_matches(hostname, rule))
+            .max_by_key(|rule| rule.hostname.len())
         {
             return Some(ProtectionMatch {
                 kind: MatchKind::Website,
@@ -286,6 +294,47 @@ mod tests {
         assert_eq!(matched.visibility_percent, 30);
         config.enabled = false;
         assert_eq!(evaluate(&config, &context), None);
+    }
+
+    #[test]
+    fn most_specific_hostname_rule_wins() {
+        let mut config = config();
+        config.site_rules.insert(
+            0,
+            SiteRule {
+                id: "parent-site".into(),
+                hostname: "example".into(),
+                include_subdomains: true,
+                visibility_percent: 70,
+                enabled: true,
+            },
+        );
+        let matched = evaluate(
+            &config,
+            &ForegroundContext {
+                platform_app_id: "com.example.browser",
+                browser_hostname: Some("bank.example"),
+            },
+        )
+        .expect("specific site rule should match");
+        assert_eq!(matched.rule_id, "bank-site");
+        assert_eq!(matched.visibility_percent, 30);
+    }
+
+    #[test]
+    fn config_rejects_duplicate_application_matchers() {
+        let mut config = config();
+        config.app_rules.push(AppRule {
+            id: "bank-app-copy".into(),
+            platform_app_id: "com.example.bank".into(),
+            display_name: "Bank copy".into(),
+            visibility_percent: 20,
+            enabled: true,
+        });
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "duplicate platform application id: com.example.bank"
+        );
     }
 
     #[test]

@@ -156,6 +156,7 @@ h2 { font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
 .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; background: var(--muted); transition: 150ms ease; }
 .switch input:checked + span { border-color: var(--protected); background: var(--protected); }.switch input:checked + span::after { transform: translateX(14px); background: white; }
 .switch input:focus-visible + span { outline: 3px solid color-mix(in srgb, var(--focus) 36%, transparent); outline-offset: 2px; }
+.switch input:disabled + span, #shortcut:disabled { opacity: .48; cursor: not-allowed; }
 .empty-state { display: flex; min-height: 290px; flex-direction: column; align-items: center; justify-content: center; padding: 34px; text-align: center; }
 .empty-aperture { width: 56px; height: 56px; margin-bottom: 16px; border-color: var(--border-strong); }
 .empty-aperture::before, .empty-aperture::after { content: ""; position: absolute; left: 50%; top: 50%; width: 1px; height: 22px; background: var(--border-strong); transform-origin: center; }.empty-aperture::before { transform: translate(-50%, -50%) rotate(45deg); }.empty-aperture::after { transform: translate(-50%, -50%) rotate(-45deg); }.empty-aperture i { width: 17px; height: 17px; border: 1px solid var(--border-strong); }

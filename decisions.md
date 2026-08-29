@@ -48,3 +48,15 @@
 - State current developer-build path because GitHub has no published release. Make signed/notarized macOS DMG first roadmap item because it is current download blocker.
 - Rank roadmap by immediate daily utility: install, menu-bar/Peek recovery, startup/emergency control, browser rules, then platform expansion.
 - Preserve hardware boundary: brightness keys change whole panel; only overlay can dim individual app windows. Never imply ordinary laptop can reproduce Galaxy optical side-view restriction.
+
+## 2026-08-29 — Review correctness blockers
+
+- Work on `fix/review-correctness-blockers` from current `main`; never implement directly on or push directly to `main`.
+- Review found no P0. Stuck dimming and silent configuration loss are P1 because process termination/system controls remain available and no irreversible loss, remote compromise, or privilege escalation was shown.
+- Emergency recovery disables runtime protection before overlay or brightness cleanup, attempts both cleanup paths even if one fails, and persists paused state through one native command.
+- Treat overlay application as a transaction. Track every touched native window, hide all tracked windows after any apply failure, retain retryable window bookkeeping, and aggregate rollback errors.
+- Browser local storage is preview-only. Native save/load failures stay native errors; UI rolls back to last confirmed config and never reports false success. Native save rolls disk/runtime state back together if activation fails.
+- Disable and label launch-at-login and global-shortcut controls until platform adapters consume them. In-app Remove dim now remains supported recovery.
+- Represent controllable and unsupported displays independently. Mixed setups remain usable but visibly report partial support and unchanged displays.
+- Reuse one transactional hardware-apply helper across macOS, Windows, and Linux so any later-display failure restores every earlier changed display.
+- Reject duplicate platform application identifiers at UI and Rust validation boundaries. Resolve matching website rules by longest matching hostname, independent of insertion order.

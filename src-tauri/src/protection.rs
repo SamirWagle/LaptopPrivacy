@@ -145,8 +145,23 @@ impl ProtectionRuntime {
     }
 
     pub fn remove_all_dimming(&self) -> Result<(), String> {
-        self.0.overlay.clear()?;
-        self.0.brightness.cancel()
+        pause_config(&self.0.config)?;
+        let overlay = self.0.overlay.clear();
+        let brightness = self.0.brightness.cancel();
+        if let Ok(mut status) = self.0.status.lock() {
+            status.matched_rule_id = None;
+            status.matched_visibility_percent = None;
+            status.hardware_active = false;
+            status.overlay_active = false;
+            status.message = "Protection paused; all dimming removed".into();
+        }
+        match (overlay, brightness) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(overlay_error), Err(brightness_error)) => {
+                Err(format!("{overlay_error}; {brightness_error}"))
+            }
+        }
     }
 
     pub fn stop(&self) {
@@ -244,6 +259,14 @@ impl ProtectionRuntime {
     }
 }
 
+fn pause_config(config: &RwLock<AppConfig>) -> Result<(), String> {
+    config
+        .write()
+        .map_err(|_| "protection config is unavailable")?
+        .enabled = false;
+    Ok(())
+}
+
 fn protection_target(
     config: &AppConfig,
     foreground: &ForegroundApplication,
@@ -314,5 +337,15 @@ mod tests {
         .unwrap();
         assert_eq!(maximum.hardware_percent, Some(10));
         assert_eq!(maximum.visibility_percent, 10);
+    }
+
+    #[test]
+    fn emergency_pause_disables_matching_before_cleanup() {
+        let config = RwLock::new(AppConfig {
+            enabled: true,
+            ..AppConfig::default()
+        });
+        pause_config(&config).unwrap();
+        assert!(!config.read().unwrap().enabled);
     }
 }

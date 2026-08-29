@@ -123,50 +123,86 @@ impl OverlayControl {
         }
         for (index, display) in plan.iter().enumerate() {
             let label = format!("{LABEL_PREFIX}{index}");
-            let window = if let Some(window) = self.app.get_window(&label) {
+            let result = (|| {
+                let window = if let Some(window) = self.app.get_window(&label) {
+                    window
+                } else {
+                    WindowBuilder::new(&self.app, &label)
+                        .title("Privacy Aperture overlay")
+                        .inner_size(1.0, 1.0)
+                        .position(0.0, 0.0)
+                        .decorations(false)
+                        .resizable(false)
+                        .maximizable(false)
+                        .minimizable(false)
+                        .closable(false)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .skip_taskbar(true)
+                        .shadow(false)
+                        .focused(false)
+                        .focusable(false)
+                        .visible(false)
+                        .background_color(tauri::utils::config::Color(0, 0, 0, 255))
+                        .build()
+                        .map_err(|error| format!("Could not create privacy overlay: {error}"))?
+                };
                 window
-            } else {
-                WindowBuilder::new(&self.app, &label)
-                    .title("Privacy Aperture overlay")
-                    .inner_size(1.0, 1.0)
-                    .position(0.0, 0.0)
-                    .decorations(false)
-                    .resizable(false)
-                    .maximizable(false)
-                    .minimizable(false)
-                    .closable(false)
-                    .always_on_top(true)
-                    .visible_on_all_workspaces(true)
-                    .skip_taskbar(true)
-                    .shadow(false)
-                    .focused(false)
-                    .focusable(false)
-                    .visible(false)
-                    .background_color(tauri::utils::config::Color(0, 0, 0, 255))
-                    .build()
-                    .map_err(|error| format!("Could not create privacy overlay: {error}"))?
-            };
-            window
-                .set_ignore_cursor_events(true)
-                .and_then(|_| window.set_position(display.position))
-                .and_then(|_| window.set_size(display.size))
-                .and_then(|_| {
-                    window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 255)))
-                })
-                .map_err(|error| format!("Could not configure privacy overlay: {error}"))?;
-            platform::set_opacity(&window, display.alpha)?;
-            window
-                .show()
-                .map_err(|error| format!("Could not configure privacy overlay: {error}"))?;
-        }
-        for index in plan.len()..state.window_count {
-            if let Some(window) = self.app.get_window(&format!("{LABEL_PREFIX}{index}")) {
-                let _ = window.hide();
+                    .set_ignore_cursor_events(true)
+                    .and_then(|_| window.set_position(display.position))
+                    .and_then(|_| window.set_size(display.size))
+                    .and_then(|_| {
+                        window.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 255)))
+                    })
+                    .map_err(|error| format!("Could not configure privacy overlay: {error}"))?;
+                platform::set_opacity(&window, display.alpha)?;
+                window
+                    .show()
+                    .map_err(|error| format!("Could not configure privacy overlay: {error}"))
+            })();
+            state.window_count = state.window_count.max(index + 1);
+            if let Err(error) = result {
+                let rollback = self.hide_windows(0, state.window_count);
+                state.plan = None;
+                return Err(match rollback {
+                    Ok(()) => error,
+                    Err(rollback_error) => {
+                        format!("{error}; overlay rollback failed: {rollback_error}")
+                    }
+                });
             }
         }
-        state.window_count = state.window_count.max(plan.len());
+        if let Err(error) = self.hide_windows(plan.len(), state.window_count) {
+            let rollback = self.hide_windows(0, state.window_count);
+            state.plan = None;
+            return Err(match rollback {
+                Ok(()) => error,
+                Err(rollback_error) => {
+                    format!("{error}; overlay rollback failed: {rollback_error}")
+                }
+            });
+        }
         state.plan = Some(plan);
         Ok(true)
+    }
+
+    fn hide_windows(&self, start: usize, end: usize) -> Result<(), String> {
+        let mut failures = Vec::new();
+        for index in start..end {
+            if let Some(window) = self.app.get_window(&format!("{LABEL_PREFIX}{index}")) {
+                if let Err(error) = window.hide() {
+                    failures.push(format!("{index}: {error}"));
+                }
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Could not hide privacy overlays: {}",
+                failures.join(", ")
+            ))
+        }
     }
 
     fn clear_windows(&self) -> Result<(), String> {
@@ -174,18 +210,13 @@ impl OverlayControl {
             .state
             .lock()
             .map_err(|_| "overlay state is unavailable")?;
-        if state.plan.is_none() {
+        if state.window_count == 0 {
+            state.plan = None;
             return Ok(());
         }
-        for index in 0..state.window_count {
-            if let Some(window) = self.app.get_window(&format!("{LABEL_PREFIX}{index}")) {
-                window
-                    .hide()
-                    .map_err(|error| format!("Could not hide privacy overlay: {error}"))?;
-            }
-        }
+        let result = self.hide_windows(0, state.window_count);
         state.plan = None;
-        Ok(())
+        result
     }
 
     fn finish_preview(&self, generation: u64) -> Result<(), String> {
