@@ -8,7 +8,67 @@ pub mod storage;
 
 use domain::{AppConfig, AppRule};
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
+use std::{
+    fs::{File, OpenOptions, TryLockError},
+    os::unix::net::UnixStream,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tauri::{Emitter, Manager};
+
+static PENDING_SETTINGS_RESTORE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "macos")]
+fn single_instance_paths(identifier: &str) -> (PathBuf, PathBuf) {
+    let identifier = identifier.replace(['.', '-'], "_");
+    (
+        PathBuf::from(format!("/tmp/{identifier}_si.sock")),
+        PathBuf::from(format!("/tmp/{identifier}_si_startup.lock")),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn prepare_startup_gate(identifier: &str) -> Result<Option<File>, String> {
+    let (socket_path, lock_path) = single_instance_paths(identifier);
+    if UnixStream::connect(&socket_path).is_ok() {
+        return Ok(None);
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .map_err(|error| format!("Could not open startup ownership lock: {error}"))?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match file.try_lock() {
+            Ok(()) => {
+                if UnixStream::connect(&socket_path).is_ok() {
+                    return Ok(None);
+                }
+                if let Err(error) = std::fs::remove_file(&socket_path) {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        return Err(format!("Could not clear stale instance socket: {error}"));
+                    }
+                }
+                return Ok(Some(file));
+            }
+            Err(TryLockError::WouldBlock) if UnixStream::connect(&socket_path).is_ok() => {
+                return Ok(None)
+            }
+            Err(TryLockError::WouldBlock) if Instant::now() >= deadline => {
+                return Err("Timed out waiting for primary instance startup".into())
+            }
+            Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(10)),
+            Err(TryLockError::Error(error)) => {
+                return Err(format!("Could not acquire startup ownership: {error}"))
+            }
+        }
+    }
+}
 
 fn config_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     app.path()
@@ -268,16 +328,35 @@ fn register_shortcuts(
 }
 
 pub(crate) fn show_settings(app: &tauri::AppHandle) {
+    PENDING_SETTINGS_RESTORE.store(true, Ordering::Release);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
         let _ = app.emit("command-center:refresh", ());
+        PENDING_SETTINGS_RESTORE.store(false, Ordering::Release);
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let context = tauri::generate_context!();
+    #[cfg(target_os = "macos")]
+    let startup_ownership = match prepare_startup_gate(&context.config().identifier) {
+        Ok(ownership) => ownership,
+        Err(error) => {
+            eprintln!("Privacy Aperture did not start: {error}");
+            std::process::exit(1);
+        }
+    };
+    #[cfg(target_os = "macos")]
+    let startup_handoff = startup_ownership.is_none();
+    #[cfg(not(target_os = "macos"))]
+    let startup_handoff = false;
+    let builder =
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            show_settings(app);
+        }));
+    let app = builder
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg("--autostart")
@@ -288,7 +367,11 @@ pub fn run() {
                 .with_handler(command_center::handle_shortcut)
                 .build(),
         )
-        .setup(|app| {
+        .setup(move |app| {
+            if startup_handoff {
+                eprintln!("Privacy Aperture stopped an unsafe duplicate startup");
+                std::process::exit(1);
+            }
             let (config, load_error) =
                 match config_path(app.handle()).and_then(|path| storage::load(&path)) {
                     Ok(config) => (config, None),
@@ -339,9 +422,14 @@ pub fn run() {
             set_launch_at_login,
             register_shortcuts
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building Privacy Aperture");
     app.run(|app_handle, event| {
+        if matches!(event, tauri::RunEvent::Ready)
+            && PENDING_SETTINGS_RESTORE.swap(false, Ordering::AcqRel)
+        {
+            show_settings(app_handle);
+        }
         if matches!(
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
@@ -349,11 +437,74 @@ pub fn run() {
             app_handle.state::<protection::ProtectionRuntime>().stop();
         }
     });
+    #[cfg(target_os = "macos")]
+    drop(startup_ownership);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    use std::{os::unix::net::UnixListener, sync::atomic::AtomicUsize};
+
+    #[cfg(target_os = "macos")]
+    static NEXT_TEST_SOCKET: AtomicUsize = AtomicUsize::new(0);
+
+    #[cfg(target_os = "macos")]
+    fn test_identifier(label: &str) -> String {
+        format!(
+            "com.privacyaperture.test.{}.{}.{}",
+            std::process::id(),
+            NEXT_TEST_SOCKET.fetch_add(1, Ordering::Relaxed),
+            label
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn single_instance_paths_match_official_macos_socket_name() {
+        let (socket, lock) = single_instance_paths("com.privacy-aperture.desktop");
+        assert_eq!(
+            socket,
+            PathBuf::from("/tmp/com_privacy_aperture_desktop_si.sock")
+        );
+        assert_eq!(
+            lock,
+            PathBuf::from("/tmp/com_privacy_aperture_desktop_si_startup.lock")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn live_official_socket_hands_off_without_removal() {
+        let identifier = test_identifier("live");
+        let (socket, lock) = single_instance_paths(&identifier);
+        let listener = UnixListener::bind(&socket).unwrap();
+
+        let ownership = prepare_startup_gate(&identifier).unwrap();
+
+        assert!(ownership.is_none());
+        assert!(socket.exists());
+        drop(listener);
+        let _ = std::fs::remove_file(socket);
+        let _ = std::fs::remove_file(lock);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn stale_official_socket_is_cleared_by_new_primary() {
+        let identifier = test_identifier("stale");
+        let (socket, lock) = single_instance_paths(&identifier);
+        drop(UnixListener::bind(&socket).unwrap());
+
+        let ownership = prepare_startup_gate(&identifier).unwrap();
+
+        assert!(ownership.is_some());
+        assert!(!socket.exists());
+        drop(ownership);
+        let _ = std::fs::remove_file(socket);
+        let _ = std::fs::remove_file(lock);
+    }
 
     #[test]
     fn quick_protect_reopens_existing_rule_without_duplicate() {
