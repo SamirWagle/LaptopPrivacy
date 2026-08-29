@@ -87,3 +87,4 @@
 - Forced `open -n` during lifecycle testing created second development instance and caused later UI clicks to hit stale instance. Stopped only two test PIDs, restored exact pre-test config summary (enabled, launch-at-login off, hardware opt-in off, 35%, zero rules), verified both processes stopped, and deleted two temporary screenshots containing unrelated desktop content.
 - Rebuilt latest unsigned bundle after final context-boundary fix. Clean single-instance smoke exposed complete Watching-state tray menu, tray Quit ended process, and post-smoke config still matched recorded baseline.
 - Final review found possible worker/main-thread quit deadlock around synchronous tray item mutation. Moved tray updates onto Tauri main-thread queue; repeated 22 tests, clippy, frontend build, formatting, and diff checks passed.
+- Committed as `f616bfe`, pushed only `feat/macos-command-center`, and opened direct-main PR #8. No merge or direct `main` push performed.
