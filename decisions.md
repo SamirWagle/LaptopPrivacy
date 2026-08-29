@@ -74,3 +74,12 @@
 - Queue tray UI mutations onto Tauri main thread. Runtime worker never blocks on menu updates while quit path joins worker.
 - Keep official Tauri single-instance plugin first, but close its macOS asynchronous-listener cold-start race with a standard-library file lock derived from the Tauri identifier. Primary holds ownership through `app.run`; handoff requires a successful connection to the exact official socket, never path existence. Probe before lock acquisition and again after acquiring it; only a failed probe permits stale-socket removal. Blocked launches retry connection or take ownership if startup dies; any failed handoff exits nonzero before user setup.
 - Latch second-launch settings requests received before window creation. Consume the latch at Tauri Ready, after autostart hiding, through shared `show_settings` behavior.
+
+## 2026-08-29 — Windowed application picker
+
+- Work on `fix/windowed-application-picker` from current `origin/main`; never merge or push directly to `main`.
+- Define picker eligibility once from one CoreGraphics on-screen window snapshot: exclude desktop elements, require layer zero, positive alpha, and bounds of at least 40×40 points.
+- Filter `NSWorkspace` applications by eligible owner PID before bundle-identifier deduplication. This keeps a visible main process when a same-bundle helper process appears first, excludes background helpers, and remains O(applications + windows).
+- Reuse the same eligible-window scanner for privacy overlay bounds so picker and protection semantics cannot drift.
+- Preserve `current()` as direct `NSWorkspace.frontmostApplication` lookup; picker filtering must not change runtime foreground detection.
+- Keep collection local to process IDs, bundle identifiers, display names, and geometry. Never read window titles, content, URLs, screenshots, or Accessibility text.

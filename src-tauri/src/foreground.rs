@@ -17,8 +17,25 @@ pub struct WindowBounds {
 }
 
 #[cfg(target_os = "macos")]
+fn filter_windowed_applications(
+    applications: Vec<ForegroundApplication>,
+    eligible_owner_pids: &std::collections::HashSet<i32>,
+) -> Vec<ForegroundApplication> {
+    let mut by_id = std::collections::BTreeMap::new();
+    for app in applications {
+        if eligible_owner_pids.contains(&app.process_id)
+            && app.platform_app_id != "com.privacyaperture.desktop"
+        {
+            by_id.entry(app.platform_app_id.clone()).or_insert(app);
+        }
+    }
+    by_id.into_values().collect()
+}
+
+#[cfg(target_os = "macos")]
 mod platform {
-    use super::{ForegroundApplication, WindowBounds};
+    use super::{filter_windowed_applications, ForegroundApplication, WindowBounds};
+    use std::collections::HashSet;
     use std::ffi::{c_char, c_void, CStr};
 
     type Object = *mut c_void;
@@ -129,6 +146,10 @@ mod platform {
     }
 
     pub fn running() -> Result<Vec<ForegroundApplication>, String> {
+        let eligible_owner_pids: HashSet<i32> = eligible_window_snapshot()?
+            .into_iter()
+            .map(|window| window.process_id)
+            .collect();
         unsafe {
             with_pool(|| {
                 let workspace_class = objc_getClass(c"NSWorkspace".as_ptr());
@@ -138,17 +159,15 @@ mod platform {
                 let workspace = send_object(workspace_class, c"sharedWorkspace");
                 let applications = send_object(workspace, c"runningApplications");
                 let count = send_usize(applications, c"count");
-                let mut by_id = std::collections::BTreeMap::new();
+                let mut running = Vec::new();
                 for index in 0..count {
                     if let Some(app) =
                         application(send_object_at(applications, c"objectAtIndex:", index))
                     {
-                        if app.platform_app_id != "com.privacyaperture.desktop" {
-                            by_id.entry(app.platform_app_id.clone()).or_insert(app);
-                        }
+                        running.push(app);
                     }
                 }
-                Ok(by_id.into_values().collect())
+                Ok(filter_windowed_applications(running, &eligible_owner_pids))
             })
         }
     }
@@ -184,7 +203,12 @@ mod platform {
         fn CGRectMakeWithDictionaryRepresentation(dictionary: Object, rect: *mut Rect) -> bool;
     }
 
-    pub fn window_bounds(process_id: i32) -> Result<Vec<WindowBounds>, String> {
+    struct EligibleWindow {
+        process_id: i32,
+        bounds: WindowBounds,
+    }
+
+    fn eligible_window_snapshot() -> Result<Vec<EligibleWindow>, String> {
         const ON_SCREEN_ONLY: u32 = 1;
         const EXCLUDE_DESKTOP: u32 = 16;
         unsafe {
@@ -200,7 +224,6 @@ mod platform {
                 let layer = send_object_with_object(info, c"objectForKey:", kCGWindowLayer);
                 let alpha = send_object_with_object(info, c"objectForKey:", kCGWindowAlpha);
                 if owner.is_null()
-                    || send_i32(owner, c"intValue") != process_id
                     || layer.is_null()
                     || send_i32(layer, c"intValue") != 0
                     || (!alpha.is_null() && send_f64(alpha, c"doubleValue") <= 0.0)
@@ -214,24 +237,36 @@ mod platform {
                     && rect.size.width >= 40.0
                     && rect.size.height >= 40.0
                 {
-                    windows.push(WindowBounds {
-                        x: rect.origin.x,
-                        y: rect.origin.y,
-                        width: rect.size.width,
-                        height: rect.size.height,
+                    windows.push(EligibleWindow {
+                        process_id: send_i32(owner, c"intValue"),
+                        bounds: WindowBounds {
+                            x: rect.origin.x,
+                            y: rect.origin.y,
+                            width: rect.size.width,
+                            height: rect.size.height,
+                        },
                     });
                 }
             }
             CFRelease(list);
-            windows.sort_by(|left, right| {
-                left.x
-                    .total_cmp(&right.x)
-                    .then(left.y.total_cmp(&right.y))
-                    .then(left.width.total_cmp(&right.width))
-                    .then(left.height.total_cmp(&right.height))
-            });
             Ok(windows)
         }
+    }
+
+    pub fn window_bounds(process_id: i32) -> Result<Vec<WindowBounds>, String> {
+        let mut windows: Vec<_> = eligible_window_snapshot()?
+            .into_iter()
+            .filter(|window| window.process_id == process_id)
+            .map(|window| window.bounds)
+            .collect();
+        windows.sort_by(|left, right| {
+            left.x
+                .total_cmp(&right.x)
+                .then(left.y.total_cmp(&right.y))
+                .then(left.width.total_cmp(&right.width))
+                .then(left.height.total_cmp(&right.height))
+        });
+        Ok(windows)
     }
 }
 
@@ -281,6 +316,44 @@ mod tests {
         })
         .unwrap();
         assert!(value.get("process_id").is_none());
+    }
+
+    #[test]
+    fn running_applications_keep_only_eligible_window_owners_before_deduping() {
+        let applications = vec![
+            ForegroundApplication {
+                platform_app_id: "com.example.visible".into(),
+                display_name: "Stale helper".into(),
+                process_id: 10,
+            },
+            ForegroundApplication {
+                platform_app_id: "com.example.hidden".into(),
+                display_name: "Hidden helper".into(),
+                process_id: 20,
+            },
+            ForegroundApplication {
+                platform_app_id: "com.example.visible".into(),
+                display_name: "Visible application".into(),
+                process_id: 30,
+            },
+            ForegroundApplication {
+                platform_app_id: "com.privacyaperture.desktop".into(),
+                display_name: "Privacy Aperture".into(),
+                process_id: 40,
+            },
+        ];
+        let eligible_owner_pids = [30, 40].into_iter().collect();
+
+        let filtered = filter_windowed_applications(applications, &eligible_owner_pids);
+
+        assert_eq!(
+            filtered,
+            vec![ForegroundApplication {
+                platform_app_id: "com.example.visible".into(),
+                display_name: "Visible application".into(),
+                process_id: 30,
+            }]
+        );
     }
 
     #[test]
