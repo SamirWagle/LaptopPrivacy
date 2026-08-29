@@ -60,3 +60,15 @@
 - Represent controllable and unsupported displays independently. Mixed setups remain usable but visibly report partial support and unchanged displays.
 - Reuse one transactional hardware-apply helper across macOS, Windows, and Linux so any later-display failure restores every earlier changed display.
 - Reject duplicate platform application identifiers at UI and Rust validation boundaries. Resolve matching website rules by longest matching hostname, independent of insertion order.
+
+## 2026-08-29 — macOS command center
+
+- Work on `feat/macos-command-center` from fetched `origin/main` at merged PR #7. Never merge or push directly to `main`.
+- Use Tauri tray, official autostart plugin, and official global-shortcut plugin from Rust. Expose narrow application commands; do not grant JavaScript direct plugin permissions.
+- Keep config at v2 in this PR. Emergency shortcut remains user-configurable; Peek uses fixed `CommandOrControl+Shift+Space` until v3 adds persisted `peek_shortcut` with Focus mode.
+- Treat shortcut replacement as transaction: register candidate before releasing working shortcut; reject Peek collision; remove candidate if releasing previous shortcut fails.
+- Global emergency action persists pause, clears every overlay, and restores captured hardware brightness. Peek is memory-only and never modifies rules or persisted enabled state.
+- Closing settings hides main window. Autostart uses `--autostart` to begin hidden. Tray Quit stops runtime and restores overlay/brightness ownership before exit.
+- Quick Protect uses last external foreground app only while settings app is foreground. Protection evaluation always uses actual current foreground app; fallback context must never keep stale privacy overlays active.
+- Menu-bar state combines symbol, text, and tooltip for watching, protected, Peek, paused, and error states; error text remains sanitized and contains no app or hostname history.
+- Queue tray UI mutations onto Tauri main thread. Runtime worker never blocks on menu updates while quit path joins worker.

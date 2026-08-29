@@ -76,3 +76,15 @@
 - Windows cross-check remains environment-blocked before project compilation by missing `x86_64-w64-mingw32-windres`. Linux cross-check remains environment-blocked by absent cross-target GTK/GIO/Pango pkg-config sysroot; no platform runtime claim added.
 - Built unsigned release `Privacy Aperture.app`, launched release runtime successfully, stopped it with normal interrupt, and verified no `privacy-aperture` process remained.
 - Committed all eight review fixes as `6cda97a`, pushed only `fix/review-correctness-blockers`, and opened PR #7 against `main`. GitHub reports PR open and mergeable with zero configured checks; no merge or direct `main` push performed.
+- Confirmed PR #7 merged at `6fdeed9`, fast-forwarded local `main`, and created direct-main branch `feat/macos-command-center` before edits.
+- Queried existing Graphify map for rule/runtime/storage integration points, then verified every decision against current source and installed Tauri APIs.
+- Added menu-bar command center with live Watching/Protected/Peek/Paused/Error state, Protect Current App, Peek, Pause/Resume, Open Settings, and cleanup-first Quit.
+- Added official Tauri autostart and global-shortcut plugins behind Rust commands. Launch-at-login writes OS and config transactionally; shortcut conflicts retain previous registration.
+- Added memory-only hold-to-Peek, persistent emergency pause, close-to-hide, hidden autostart launch, Quick Protect at 35% visibility, and existing-rule dedupe/edit routing.
+- Added unit coverage for default shortcut parsing, Peek collision, shortcut rollback, autostart reconciliation, and Quick Protect dedupe.
+- Automated checks passed before live acceptance: TypeScript/Vite production build, 22 Rust tests with 2 expected ignored hardware/GUI tests, clippy with warnings denied, and unsigned macOS `.app` bundle.
+- Live macOS acceptance passed: command-center item list visible; Command-W hid settings while process/menu stayed alive; Open Settings restored focus; tray Peek changed state `Watching -> Peek -> Watching`; physical Command-Shift-0 changed `Watching -> Paused` and persisted pause; tray Resume restored enabled config; tray Quit exited tested process.
+- Forced `open -n` during lifecycle testing created second development instance and caused later UI clicks to hit stale instance. Stopped only two test PIDs, restored exact pre-test config summary (enabled, launch-at-login off, hardware opt-in off, 35%, zero rules), verified both processes stopped, and deleted two temporary screenshots containing unrelated desktop content.
+- Rebuilt latest unsigned bundle after final context-boundary fix. Clean single-instance smoke exposed complete Watching-state tray menu, tray Quit ended process, and post-smoke config still matched recorded baseline.
+- Final review found possible worker/main-thread quit deadlock around synchronous tray item mutation. Moved tray updates onto Tauri main-thread queue; repeated 22 tests, clippy, frontend build, formatting, and diff checks passed.
+- Committed as `f616bfe`, pushed only `feat/macos-command-center`, and opened direct-main PR #8. No merge or direct `main` push performed.
