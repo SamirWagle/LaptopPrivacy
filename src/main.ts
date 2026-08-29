@@ -301,7 +301,7 @@ function appForm(): string {
   const rule = currentAppRule();
   return `<form class="rule-form" id="app-form">
     <div class="form-title"><div><p class="eyebrow">${rule ? "Edit rule" : "New rule"}</p><h2>${rule ? "Update application" : "Add application"}</h2></div><button type="button" class="icon-button" data-cancel aria-label="Close form">×</button></div>
-    ${!rule && state.runningApplications.length ? `<label><span>Running application</span><select id="running-application"><option value="">Choose current app…</option>${state.runningApplications.map((app) => `<option value="${escapeHtml(app.platform_app_id)}">${escapeHtml(app.display_name)} — ${escapeHtml(app.platform_app_id)}</option>`).join("")}</select></label>` : ""}
+    ${!rule && state.runningApplications.length ? `<label><span>Visible application</span><select id="running-application"><option value="">Choose visible app…</option>${state.runningApplications.map((app) => `<option value="${escapeHtml(app.platform_app_id)}">${escapeHtml(app.display_name)} — ${escapeHtml(app.platform_app_id)}</option>`).join("")}</select></label>` : ""}
     <div class="field-grid">
       <label><span>Application name</span><input name="display_name" maxlength="160" required value="${escapeHtml(rule?.display_name ?? "")}" placeholder="Finance workspace"></label>
       <label><span>Platform identifier</span><input class="mono" name="platform_app_id" maxlength="512" required value="${escapeHtml(rule?.platform_app_id ?? "")}" placeholder="com.company.application"><small>Bundle ID on macOS; executable identity on Windows/Linux.</small></label>
