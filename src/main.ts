@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import "./styles.css";
 
 type Page = "protection" | "applications" | "websites" | "settings";
@@ -36,8 +36,10 @@ interface BrightnessStatus {
   displays: Array<{
     id: string;
     name: string;
-    brightness_percent: number;
+    brightness_percent: number | null;
     built_in: boolean;
+    supported: boolean;
+    message: string | null;
   }>;
   message: string;
 }
@@ -69,10 +71,12 @@ const defaultConfig: AppConfig = {
   site_rules: [],
 };
 
+const nativeRuntime = isTauri();
+
 const state = {
   page: "protection" as Page,
   config: structuredClone(defaultConfig),
-  nativeAvailable: true,
+  persistedConfig: structuredClone(defaultConfig),
   savedMessage: "",
   addKind: null as "app" | "site" | null,
   editingId: null as string | null,
@@ -198,7 +202,7 @@ function protectionPage(): string {
         <p>Website context stays unavailable until native host is installed.</p>
       </article>
       <article class="status-card compact">
-        <div><small>Emergency shortcut</small><strong class="key-combo">${escapeHtml(state.config.emergency_shortcut)}</strong></div>
+        <div><small>Recovery control</small><strong class="key-combo">In app</strong></div>
         <div class="compact-actions"><button class="text-button" id="preview-overlays">${state.overlayPreviewActive ? "Cancel preview" : "Preview current app"}</button><button class="text-button danger" id="remove-dim">Remove dim now</button></div>
       </article>
     </div>
@@ -309,14 +313,16 @@ function visibilityField(value: number): string {
 function settingsPage(): string {
   const brightness = state.brightness;
   const brightnessControlsDisabled = brightness.supported ? "" : "disabled";
+  const partialBrightness = brightness.supported && brightness.displays.some((display) => !display.supported);
   const displays = brightness.displays.length
-    ? brightness.displays.map((display) => `<div class="detected-display"><span><strong>${escapeHtml(display.name)}</strong><small>${display.built_in ? "Built-in panel" : "External / DDC panel"}</small></span><code>${display.brightness_percent}%</code></div>`).join("")
+    ? brightness.displays.map((display) => `<div class="detected-display"><span><strong>${escapeHtml(display.name)}</strong><small>${escapeHtml(display.message ?? (display.built_in ? "Built-in panel" : "External / DDC panel"))}</small></span><code>${display.supported && display.brightness_percent !== null ? `${display.brightness_percent}%` : "Unsupported"}</code></div>`).join("")
     : `<p class="hardware-message">${escapeHtml(brightness.message)}</p>`;
   return `${pageHeader("Preferences", "Settings", "System behavior and recovery controls. Theme follows your operating system.")}
   <section class="settings-section hardware-section">
-    <div class="section-heading"><div><p class="eyebrow">Display hardware</p><h2>Global hardware brightness</h2></div><span class="pill ${brightness.supported ? "warning" : "neutral"}">${brightness.supported ? "Panel-wide" : "Unsupported"}</span></div>
+    <div class="section-heading"><div><p class="eyebrow">Display hardware</p><h2>Global hardware brightness</h2></div><span class="pill ${brightness.supported ? "warning" : "neutral"}">${partialBrightness ? "Partial support" : brightness.supported ? "Panel-wide" : "Unsupported"}</span></div>
     <p class="section-copy">Same physical level as macOS F1/F2 display keys. Hardware cannot target one app: enabling automatic hardware brightness dims entire display. Leave it off for window-only privacy.</p>
     <div class="hardware-displays">${displays}</div>
+    ${partialBrightness ? `<p class="hardware-message">${escapeHtml(brightness.message)}</p>` : ""}
     <div class="setting-row inset"><div><strong>Also dim entire display for protected rules</strong><p>Optional global layer. Window overlay remains app-only.</p></div><label class="switch"><input id="hardware-enabled" type="checkbox" ${state.config.hardware_brightness_enabled ? "checked" : ""} ${brightnessControlsDisabled} aria-label="Also dim entire display using hardware brightness"><span></span></label></div>
     <fieldset class="hardware-level" ${brightnessControlsDisabled}><legend>Privacy brightness</legend><div class="range-wrap"><input id="hardware-range" type="range" min="10" max="100" value="${state.config.privacy_brightness_percent}" aria-label="Hardware privacy brightness percentage"><div class="number-suffix"><input class="mono" id="hardware-number" type="number" min="10" max="100" value="${state.config.privacy_brightness_percent}" aria-label="Hardware privacy brightness percentage"><span>%</span></div></div></fieldset>
     <div class="hardware-actions"><button class="secondary-button" id="preview-hardware" ${brightnessControlsDisabled}>Test for 3 seconds</button><button class="primary-button" id="apply-hardware" ${brightnessControlsDisabled}>${state.hardwareActive ? "Update brightness" : "Apply now"}</button>${state.hardwareActive ? '<button class="text-button danger" id="restore-hardware">Restore original</button>' : ""}</div>
@@ -332,8 +338,8 @@ function settingsPage(): string {
     <div class="setting-row inset"><div><strong>Maximum privacy</strong><p>Use 10% app-window visibility and, only when global hardware mode is enabled, 10% entire-display brightness. Does not narrow panel viewing angle.</p></div><label class="switch"><input id="maximum-privacy" type="checkbox" ${state.config.maximum_privacy ? "checked" : ""} aria-label="Maximum privacy"><span></span></label></div>
   </section>
   <section class="settings-list">
-    <div class="setting-row"><div><strong>Launch at login</strong><p>Start protection after you sign in. Registration activates with platform adapter.</p></div><label class="switch"><input id="launch-at-login" type="checkbox" ${state.config.launch_at_login ? "checked" : ""} aria-label="Launch at login"><span></span></label></div>
-    <div class="setting-row shortcut-setting"><div><strong>Emergency shortcut</strong><p>Immediately removes all dim overlays and pauses protection.</p></div><label><span class="sr-only">Emergency shortcut</span><input class="mono" id="shortcut" maxlength="80" value="${escapeHtml(state.config.emergency_shortcut)}"></label></div>
+    <div class="setting-row"><div><strong>Launch at login</strong><p>Pending platform registration. Current build does not start automatically.</p></div><label class="switch"><input id="launch-at-login" type="checkbox" disabled aria-label="Launch at login unavailable"><span></span></label></div>
+    <div class="setting-row shortcut-setting"><div><strong>Global emergency shortcut</strong><p>Pending platform registration. Use Remove dim now inside app.</p></div><label><span class="sr-only">Emergency shortcut unavailable</span><input class="mono" id="shortcut" maxlength="80" value="${escapeHtml(state.config.emergency_shortcut)}" disabled></label></div>
     <div class="setting-row"><div><strong>Theme</strong><p>Uses system light or dark appearance.</p></div><span class="setting-value">System</span></div>
   </section>
   <section class="settings-section"><h2>Connection</h2><div class="connection-card"><span class="status-symbol warning" aria-hidden="true">↗</span><div><strong>Chromium extension disconnected</strong><p>Native host registration ships with browser-integration milestone.</p></div><span class="pill warning">Offline</span></div></section>
@@ -348,9 +354,9 @@ function onboarding(): string {
     ["Choose how much stays visible.", "Move control to close aperture. Lower visibility creates darker protection."],
     ["Add your first application.", "Choose a running macOS app. Privacy Aperture stores only its stable bundle identifier and rule."],
     ["Protect browser hostnames.", "Chromium extension sends active hostname only. It never reads page content, titles, paths, or history."],
-    ["Keep recovery close.", "Emergency shortcut removes all overlays immediately. You can change it later in Settings."],
+    ["Keep recovery close.", "Use Remove dim now inside app. Global shortcut and launch-at-login registration are pending."],
   ][step - 1];
-  const preview = step === 2 ? `<div class="onboarding-preview"><div class="mini-screen"><span>Private workspace</span><i style="opacity:${(100 - state.previewVisibility) / 100}"></i></div>${visibilityField(state.previewVisibility)}</div>` : `<div class="onboarding-art step-${step}"><span class="onboard-aperture"><i></i></span><small>${step === 1 ? "LOCAL ONLY" : step === 3 ? "APPLICATION ID" : step === 4 ? "HOSTNAME ONLY" : escapeHtml(state.config.emergency_shortcut)}</small></div>`;
+  const preview = step === 2 ? `<div class="onboarding-preview"><div class="mini-screen"><span>Private workspace</span><i style="opacity:${(100 - state.previewVisibility) / 100}"></i></div>${visibilityField(state.previewVisibility)}</div>` : `<div class="onboarding-art step-${step}"><span class="onboard-aperture"><i></i></span><small>${step === 1 ? "LOCAL ONLY" : step === 3 ? "APPLICATION ID" : step === 4 ? "HOSTNAME ONLY" : "IN-APP RECOVERY"}</small></div>`;
   return `<div class="onboarding-backdrop"><section class="onboarding" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
     <div class="onboarding-progress"><span>Setup</span><div>${[1, 2, 3, 4, 5].map((number) => `<i class="${number <= step ? "done" : ""}"></i>`).join("")}</div><span class="mono">${step}/5</span></div>
     ${preview}<div class="onboarding-copy"><p class="eyebrow">${step === 1 ? "Welcome" : `Step ${step}`}</p><h2 id="onboarding-title">${copy?.[0]}</h2><p>${copy?.[1]}</p></div>
@@ -364,16 +370,30 @@ function render(): void {
   bindEvents();
 }
 
-async function persist(message = "Saved locally"): Promise<void> {
-  try {
-    await invoke("save_config", { config: state.config });
-  } catch {
-    state.nativeAvailable = false;
-    localStorage.setItem("privacy-aperture-preview-config", JSON.stringify(state.config));
+async function persist(message = "Saved locally"): Promise<boolean> {
+  const requested = structuredClone(state.config);
+  if (!nativeRuntime) {
+    localStorage.setItem("privacy-aperture-preview-config", JSON.stringify(requested));
+    state.persistedConfig = requested;
+    state.savedMessage = message;
+    render();
+    clearMessageLater();
+    return true;
   }
-  state.savedMessage = message;
+  try {
+    await invoke("save_config", { config: requested });
+    state.persistedConfig = requested;
+    state.savedMessage = message;
+  } catch (error) {
+    state.config = structuredClone(state.persistedConfig);
+    state.savedMessage = `Could not save settings: ${String(error)}`;
+    render();
+    clearMessageLater();
+    return false;
+  }
   render();
   clearMessageLater();
+  return true;
 }
 
 function clearMessageLater(): void {
@@ -448,13 +468,7 @@ function bindEvents(): void {
     state.config.enabled = !state.config.enabled;
     void persist(state.config.enabled ? "Protection enabled" : "Protection paused");
   });
-  document.querySelector<HTMLButtonElement>("#remove-dim")?.addEventListener("click", () => {
-    state.config.enabled = false;
-    state.hardwareActive = false;
-    state.overlayPreviewActive = false;
-    void invoke("remove_all_dimming").catch(() => undefined);
-    void persist("All dimming removed; protection paused");
-  });
+  document.querySelector<HTMLButtonElement>("#remove-dim")?.addEventListener("click", () => void removeAllDimming());
   document.querySelector<HTMLButtonElement>("#preview-overlays")?.addEventListener("click", () => void toggleOverlayPreview());
   document.querySelector<HTMLInputElement>("#hardware-enabled")?.addEventListener("change", (event) => {
     state.config.hardware_brightness_enabled = (event.currentTarget as HTMLInputElement).checked;
@@ -468,15 +482,6 @@ function bindEvents(): void {
   document.querySelector<HTMLButtonElement>("#preview-hardware")?.addEventListener("click", () => void previewHardware());
   document.querySelector<HTMLButtonElement>("#apply-hardware")?.addEventListener("click", () => void applyHardware());
   document.querySelector<HTMLButtonElement>("#restore-hardware")?.addEventListener("click", () => void restoreHardware());
-  document.querySelector<HTMLInputElement>("#launch-at-login")?.addEventListener("change", (event) => {
-    state.config.launch_at_login = (event.currentTarget as HTMLInputElement).checked;
-    void persist("Launch preference saved");
-  });
-  document.querySelector<HTMLInputElement>("#shortcut")?.addEventListener("change", (event) => {
-    const value = (event.currentTarget as HTMLInputElement).value.trim();
-    if (value) state.config.emergency_shortcut = value;
-    void persist("Shortcut saved");
-  });
   document.querySelector<HTMLButtonElement>("#onboarding-next")?.addEventListener("click", () => {
     if (state.onboardingStep === 5) finishOnboarding();
     else {
@@ -489,6 +494,26 @@ function bindEvents(): void {
     render();
   });
   document.querySelector<HTMLButtonElement>("#onboarding-skip")?.addEventListener("click", finishOnboarding);
+}
+
+async function removeAllDimming(): Promise<void> {
+  state.config.enabled = false;
+  state.hardwareActive = false;
+  state.overlayPreviewActive = false;
+  if (!nativeRuntime) {
+    await persist("All dimming removed; protection paused");
+    return;
+  }
+  try {
+    const paused = await invoke<AppConfig>("remove_all_dimming");
+    state.config = paused;
+    state.persistedConfig = structuredClone(paused);
+    state.savedMessage = "All dimming removed; protection paused";
+  } catch (error) {
+    state.savedMessage = `Protection paused for this session; recovery reported: ${String(error)}`;
+  }
+  render();
+  clearMessageLater();
 }
 
 function bindHardwareLevel(): void {
@@ -631,6 +656,11 @@ function saveAppRule(event: SubmitEvent): void {
     return;
   }
   const existing = currentAppRule();
+  const duplicate = state.config.app_rules.some((rule) => rule.platform_app_id === platformId && rule.id !== existing?.id);
+  if (duplicate) {
+    formError(form, "A rule for this application already exists.");
+    return;
+  }
   const rule: AppRule = { id: existing?.id ?? crypto.randomUUID(), display_name: displayName, platform_app_id: platformId, visibility_percent: visibility, enabled: existing?.enabled ?? true };
   if (existing) Object.assign(existing, rule);
   else state.config.app_rules.push(rule);
@@ -678,11 +708,7 @@ function finishOnboarding(): void {
 }
 
 async function boot(): Promise<void> {
-  try {
-    const loaded = await invoke<AppConfig>("load_config");
-    state.config = { ...structuredClone(defaultConfig), ...loaded };
-  } catch {
-    state.nativeAvailable = false;
+  if (!nativeRuntime) {
     const preview = localStorage.getItem("privacy-aperture-preview-config");
     if (preview) {
       try {
@@ -691,7 +717,16 @@ async function boot(): Promise<void> {
         state.config = structuredClone(defaultConfig);
       }
     }
+  } else {
+    try {
+      const loaded = await invoke<AppConfig>("load_config");
+      state.config = { ...structuredClone(defaultConfig), ...loaded };
+    } catch (error) {
+      state.config = structuredClone(defaultConfig);
+      state.savedMessage = `Could not load saved settings: ${String(error)}`;
+    }
   }
+  state.persistedConfig = structuredClone(state.config);
   await refreshBrightness(false);
   await refreshProtection(false);
   render();

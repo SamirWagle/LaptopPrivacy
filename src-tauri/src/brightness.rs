@@ -8,8 +8,10 @@ use std::sync::{
 pub struct BrightnessDisplay {
     pub id: String,
     pub name: String,
-    pub brightness_percent: u8,
+    pub brightness_percent: Option<u8>,
     pub built_in: bool,
+    pub supported: bool,
+    pub message: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -150,12 +152,7 @@ fn restore_state(state: &mut ControlState) -> Result<(), String> {
 
 pub fn status() -> BrightnessStatus {
     match platform::snapshot() {
-        Ok(snapshot) if !snapshot.displays().is_empty() => BrightnessStatus {
-            supported: true,
-            displays: snapshot.displays(),
-            message: "Hardware brightness control available".into(),
-        },
-        Ok(_) => unsupported("No controllable display brightness interface found"),
+        Ok(snapshot) => status_from_snapshot(&snapshot, "Hardware brightness control available"),
         Err(error) => unsupported(&error),
     }
 }
@@ -163,44 +160,29 @@ pub fn status() -> BrightnessStatus {
 pub(crate) fn apply(percent: u8) -> Result<(BrightnessStatus, Snapshot), String> {
     validate_percent(percent)?;
     let snapshot = platform::snapshot()?;
-    if snapshot.displays().is_empty() {
+    if snapshot.controllable_count() == 0 {
         return Err("No controllable display brightness interface found".into());
     }
     platform::set(&snapshot, percent)?;
-    let displays = snapshot
-        .displays()
-        .into_iter()
-        .map(|mut display| {
-            display.brightness_percent = percent;
-            display
-        })
-        .collect();
-    Ok((
-        BrightnessStatus {
-            supported: true,
-            displays,
-            message: "Hardware brightness applied".into(),
-        },
-        snapshot,
-    ))
+    let mut status = status_from_snapshot(&snapshot, "Hardware brightness applied");
+    for display in &mut status.displays {
+        if display.supported {
+            display.brightness_percent = Some(percent);
+        }
+    }
+    Ok((status, snapshot))
 }
 
 fn set(snapshot: &Snapshot, percent: u8) -> Result<BrightnessStatus, String> {
     validate_percent(percent)?;
     platform::set(snapshot, percent)?;
-    let displays = snapshot
-        .displays()
-        .into_iter()
-        .map(|mut display| {
-            display.brightness_percent = percent;
-            display
-        })
-        .collect();
-    Ok(BrightnessStatus {
-        supported: true,
-        displays,
-        message: "Hardware brightness applied".into(),
-    })
+    let mut status = status_from_snapshot(snapshot, "Hardware brightness applied");
+    for display in &mut status.displays {
+        if display.supported {
+            display.brightness_percent = Some(percent);
+        }
+    }
+    Ok(status)
 }
 
 pub(crate) fn restore(snapshot: &Snapshot) -> Result<(), String> {
@@ -223,9 +205,56 @@ fn unsupported(message: &str) -> BrightnessStatus {
     }
 }
 
+fn status_from_snapshot(snapshot: &Snapshot, success: &str) -> BrightnessStatus {
+    let displays = snapshot.displays();
+    let controllable = snapshot.controllable_count();
+    let total = displays.len();
+    BrightnessStatus {
+        supported: controllable > 0,
+        displays,
+        message: display_status_message(controllable, total, success),
+    }
+}
+
+fn display_status_message(controllable: usize, total: usize, success: &str) -> String {
+    if controllable == 0 {
+        "No controllable display brightness interface found".into()
+    } else if controllable < total {
+        format!(
+            "{success} on {controllable} of {total} displays; unsupported displays remain unchanged"
+        )
+    } else {
+        success.into()
+    }
+}
+
+fn apply_transactionally<T>(
+    targets: &[T],
+    mut apply: impl FnMut(&T) -> Result<(), String>,
+    mut rollback: impl FnMut(&T) -> Result<(), String>,
+) -> Result<(), String> {
+    for (index, target) in targets.iter().enumerate() {
+        if let Err(error) = apply(target) {
+            let rollback_failures: Vec<_> = targets[..index]
+                .iter()
+                .filter_map(|changed| rollback(changed).err())
+                .collect();
+            return if rollback_failures.is_empty() {
+                Err(error)
+            } else {
+                Err(format!(
+                    "{error}; rollback failed: {}",
+                    rollback_failures.join(", ")
+                ))
+            };
+        }
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::BrightnessDisplay;
+    use super::{apply_transactionally, BrightnessDisplay};
     use std::ffi::{c_char, c_void};
 
     const SUCCESS: i32 = 0;
@@ -296,11 +325,14 @@ mod platform {
     }
 
     #[derive(Clone, Debug)]
-    pub struct Snapshot(Vec<Reading>);
+    pub struct Snapshot {
+        readings: Vec<Reading>,
+        unavailable: Vec<BrightnessDisplay>,
+    }
 
     impl Snapshot {
         pub fn displays(&self) -> Vec<BrightnessDisplay> {
-            self.0
+            self.readings
                 .iter()
                 .map(|reading| BrightnessDisplay {
                     id: reading.display_id.to_string(),
@@ -309,10 +341,19 @@ mod platform {
                     } else {
                         format!("External display {}", reading.display_id)
                     },
-                    brightness_percent: (reading.brightness.clamp(0.0, 1.0) * 100.0).round() as u8,
+                    brightness_percent: Some(
+                        (reading.brightness.clamp(0.0, 1.0) * 100.0).round() as u8
+                    ),
                     built_in: reading.built_in,
+                    supported: true,
+                    message: None,
                 })
+                .chain(self.unavailable.iter().cloned())
                 .collect()
+        }
+
+        pub fn controllable_count(&self) -> usize {
+            self.readings.len()
         }
     }
 
@@ -384,41 +425,55 @@ mod platform {
                     backend: Backend::DisplayServices,
                 });
             } else {
-                failures.push(format!(
-                    "{} (built_in={built_in}, IOKit={iokit_result}, DisplayServices={display_services_result})",
-                    display_id
-                ));
+                failures.push(BrightnessDisplay {
+                    id: display_id.to_string(),
+                    name: if built_in {
+                        "Built-in display".into()
+                    } else {
+                        format!("External display {display_id}")
+                    },
+                    brightness_percent: None,
+                    built_in,
+                    supported: false,
+                    message: Some(format!(
+                        "Unsupported brightness interface (IOKit={iokit_result}, DisplayServices={display_services_result})"
+                    )),
+                });
             }
         }
-        if readings.is_empty() && !failures.is_empty() {
-            Err(format!("No controllable display: {}", failures.join(", ")))
-        } else {
-            Ok(Snapshot(readings))
-        }
+        Ok(Snapshot {
+            readings,
+            unavailable: failures,
+        })
     }
 
     pub fn set(snapshot: &Snapshot, percent: u8) -> Result<(), String> {
         let key = BrightnessKey::new()?;
         let value = f32::from(percent) / 100.0;
-        for (index, reading) in snapshot.0.iter().enumerate() {
-            let result = set_reading(reading, key.0, value);
-            if result != SUCCESS {
-                for changed in &snapshot.0[..index] {
-                    set_reading(changed, key.0, changed.brightness);
-                }
-                return Err(format!(
-                    "Display {} rejected hardware brightness: IOKit error {result}",
-                    reading.display_id
-                ));
-            }
-        }
-        Ok(())
+        apply_transactionally(
+            &snapshot.readings,
+            |reading| {
+                let result = set_reading(reading, key.0, value);
+                (result == SUCCESS).then_some(()).ok_or_else(|| {
+                    format!(
+                        "Display {} rejected hardware brightness: platform error {result}",
+                        reading.display_id
+                    )
+                })
+            },
+            |reading| {
+                let result = set_reading(reading, key.0, reading.brightness);
+                (result == SUCCESS)
+                    .then_some(())
+                    .ok_or_else(|| format!("display {} error {result}", reading.display_id))
+            },
+        )
     }
 
     pub fn restore(snapshot: &Snapshot) -> Result<(), String> {
         let key = BrightnessKey::new()?;
         let failures: Vec<_> = snapshot
-            .0
+            .readings
             .iter()
             .filter_map(|reading| {
                 let result = set_reading(reading, key.0, reading.brightness);
@@ -446,7 +501,7 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use super::BrightnessDisplay;
+    use super::{apply_transactionally, BrightnessDisplay};
     use std::ffi::c_void;
 
     type Handle = *mut c_void;
@@ -511,23 +566,35 @@ mod platform {
 
     struct NativeMonitor {
         handle: Handle,
+        id: String,
+        name: String,
         reading: Option<Reading>,
     }
 
     #[derive(Clone, Debug)]
-    pub struct Snapshot(Vec<Reading>);
+    pub struct Snapshot {
+        readings: Vec<Reading>,
+        unavailable: Vec<BrightnessDisplay>,
+    }
 
     impl Snapshot {
         pub fn displays(&self) -> Vec<BrightnessDisplay> {
-            self.0
+            self.readings
                 .iter()
                 .map(|reading| BrightnessDisplay {
                     id: reading.id.clone(),
                     name: reading.name.clone(),
-                    brightness_percent: to_percent(reading.current, reading.min, reading.max),
+                    brightness_percent: Some(to_percent(reading.current, reading.min, reading.max)),
                     built_in: false,
+                    supported: true,
+                    message: None,
                 })
+                .chain(self.unavailable.iter().cloned())
                 .collect()
+        }
+
+        pub fn controllable_count(&self) -> usize {
+            self.readings.len()
         }
     }
 
@@ -574,20 +641,27 @@ mod platform {
                 continue;
             }
             for (physical_index, item) in physical.iter().enumerate() {
+                let id = format!("{logical_index}-{physical_index}");
+                let end = item
+                    .description
+                    .iter()
+                    .position(|value| *value == 0)
+                    .unwrap_or(128);
+                let name = String::from_utf16_lossy(&item.description[..end]);
+                let name = if name.is_empty() {
+                    format!("Display {id}")
+                } else {
+                    name
+                };
                 let (mut min, mut current, mut max) = (0, 0, 0);
                 let reading = if unsafe {
                     GetMonitorBrightness(item.handle, &mut min, &mut current, &mut max)
                 } != 0
                     && max > min
                 {
-                    let end = item
-                        .description
-                        .iter()
-                        .position(|value| *value == 0)
-                        .unwrap_or(128);
                     Some(Reading {
-                        id: format!("{logical_index}-{physical_index}"),
-                        name: String::from_utf16_lossy(&item.description[..end]),
+                        id: id.clone(),
+                        name: name.clone(),
                         current,
                         min,
                         max,
@@ -597,6 +671,8 @@ mod platform {
                 };
                 readings.push(NativeMonitor {
                     handle: item.handle,
+                    id,
+                    name,
                     reading,
                 });
             }
@@ -620,36 +696,59 @@ mod platform {
 
     pub fn snapshot() -> Result<Snapshot, String> {
         let monitors = enumerate()?;
-        let snapshot = Snapshot(
-            monitors
+        let snapshot = Snapshot {
+            readings: monitors
                 .iter()
                 .filter_map(|native| native.reading.clone())
                 .collect(),
-        );
+            unavailable: monitors
+                .iter()
+                .filter(|native| native.reading.is_none())
+                .map(|native| BrightnessDisplay {
+                    id: native.id.clone(),
+                    name: native.name.clone(),
+                    brightness_percent: None,
+                    built_in: false,
+                    supported: false,
+                    message: Some("Monitor does not expose MCCS brightness control".into()),
+                })
+                .collect(),
+        };
         close(&monitors);
         Ok(snapshot)
     }
 
     pub fn set(snapshot: &Snapshot, percent: u8) -> Result<(), String> {
         let monitors = enumerate()?;
-        let mut error = None;
-        for native in &monitors {
-            if let Some(reading) = &native.reading {
-                if snapshot.0.iter().any(|saved| saved.id == reading.id) {
-                    let target =
-                        reading.min + ((reading.max - reading.min) * u32::from(percent) / 100);
-                    if unsafe { SetMonitorBrightness(native.handle, target) } == 0 {
-                        error = Some(format!(
-                            "Monitor {} rejected hardware brightness",
-                            reading.name
-                        ));
-                        break;
-                    }
-                }
-            }
-        }
+        let targets: Vec<_> = monitors
+            .iter()
+            .filter_map(|native| {
+                let reading = native.reading.as_ref()?;
+                let saved = snapshot
+                    .readings
+                    .iter()
+                    .find(|saved| saved.id == reading.id)?;
+                Some((native, reading, saved))
+            })
+            .collect();
+        let result = apply_transactionally(
+            &targets,
+            |target| {
+                let (native, reading, _) = *target;
+                let value = reading.min + ((reading.max - reading.min) * u32::from(percent) / 100);
+                (unsafe { SetMonitorBrightness(native.handle, value) } != 0)
+                    .then_some(())
+                    .ok_or_else(|| format!("Monitor {} rejected hardware brightness", reading.name))
+            },
+            |target| {
+                let (native, _, saved) = *target;
+                (unsafe { SetMonitorBrightness(native.handle, saved.current) } != 0)
+                    .then_some(())
+                    .ok_or_else(|| format!("monitor {} restore rejected", saved.name))
+            },
+        );
         close(&monitors);
-        error.map_or(Ok(()), Err)
+        result
     }
 
     pub fn restore(snapshot: &Snapshot) -> Result<(), String> {
@@ -657,7 +756,11 @@ mod platform {
         let mut failures = Vec::new();
         for native in &monitors {
             if let Some(reading) = &native.reading {
-                if let Some(saved) = snapshot.0.iter().find(|saved| saved.id == reading.id) {
+                if let Some(saved) = snapshot
+                    .readings
+                    .iter()
+                    .find(|saved| saved.id == reading.id)
+                {
                     if unsafe { SetMonitorBrightness(native.handle, saved.current) } == 0 {
                         failures.push(reading.name.clone());
                     }
@@ -675,7 +778,7 @@ mod platform {
 
 #[cfg(target_os = "linux")]
 mod platform {
-    use super::BrightnessDisplay;
+    use super::{apply_transactionally, BrightnessDisplay};
     use std::{fs, path::PathBuf};
 
     const BACKLIGHT_ROOT: &str = "/sys/class/backlight";
@@ -698,11 +801,18 @@ mod platform {
                 .map(|reading| BrightnessDisplay {
                     id: reading.id.clone(),
                     name: reading.id.clone(),
-                    brightness_percent: ((reading.current as f64 / reading.max as f64) * 100.0)
-                        .round() as u8,
+                    brightness_percent: Some(
+                        ((reading.current as f64 / reading.max as f64) * 100.0).round() as u8,
+                    ),
                     built_in: true,
+                    supported: true,
+                    message: None,
                 })
                 .collect()
+        }
+
+        pub fn controllable_count(&self) -> usize {
+            self.0.len()
         }
     }
 
@@ -731,14 +841,18 @@ mod platform {
     }
 
     pub fn set(snapshot: &Snapshot, percent: u8) -> Result<(), String> {
-        for reading in &snapshot.0 {
-            let target = reading.max * u32::from(percent) / 100;
-            if let Err(error) = fs::write(reading.path.join("brightness"), target.to_string()) {
-                let _ = restore(snapshot);
-                return Err(format!("Could not set {} brightness: {error}", reading.id));
-            }
-        }
-        Ok(())
+        apply_transactionally(
+            &snapshot.0,
+            |reading| {
+                let target = reading.max * u32::from(percent) / 100;
+                fs::write(reading.path.join("brightness"), target.to_string())
+                    .map_err(|error| format!("Could not set {} brightness: {error}", reading.id))
+            },
+            |reading| {
+                fs::write(reading.path.join("brightness"), reading.current.to_string())
+                    .map_err(|error| format!("{}: {error}", reading.id))
+            },
+        )
     }
 
     pub fn restore(snapshot: &Snapshot) -> Result<(), String> {
@@ -772,6 +886,10 @@ mod platform {
         pub fn displays(&self) -> Vec<BrightnessDisplay> {
             Vec::new()
         }
+
+        pub fn controllable_count(&self) -> usize {
+            0
+        }
     }
     pub fn snapshot() -> Result<Snapshot, String> {
         Err("Hardware brightness is unsupported on this platform".into())
@@ -789,6 +907,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn partial_display_support_is_reported() {
+        assert_eq!(
+            display_status_message(1, 2, "Hardware brightness control available"),
+            "Hardware brightness control available on 1 of 2 displays; unsupported displays remain unchanged"
+        );
+    }
+
+    #[test]
+    fn partial_apply_rolls_back_changed_targets() {
+        let targets = [0, 1, 2];
+        let levels = Mutex::new([50, 50, 50]);
+        let error = apply_transactionally(
+            &targets,
+            |target| {
+                if *target == 2 {
+                    return Err("target 2 failed".into());
+                }
+                levels.lock().unwrap()[*target] = 20;
+                Ok(())
+            },
+            |target| {
+                levels.lock().unwrap()[*target] = 50;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, "target 2 failed");
+        assert_eq!(*levels.lock().unwrap(), [50, 50, 50]);
+    }
+
+    #[test]
     fn hardware_bounds_reject_unsafe_values() {
         assert!(validate_percent(9).is_err());
         assert!(validate_percent(10).is_ok());
@@ -799,17 +948,23 @@ mod tests {
     #[test]
     #[ignore = "changes physical display brightness briefly"]
     fn automatic_control_changes_and_restores_panel_level() {
-        let original = status().displays[0].brightness_percent;
+        let original = status().displays[0]
+            .brightness_percent
+            .expect("built-in display should expose brightness");
         assert!(original > 10, "display already at minimum test level");
         let target = original.saturating_sub(10).max(10);
         let control = BrightnessControl::default();
         assert!(control
             .reconcile_automatic("hardware-test".into(), target)
             .unwrap());
-        let changed = status().displays[0].brightness_percent;
+        let changed = status().displays[0]
+            .brightness_percent
+            .expect("built-in display should expose brightness");
         assert!(changed.abs_diff(target) <= 2);
         control.cancel().unwrap();
-        let restored = status().displays[0].brightness_percent;
+        let restored = status().displays[0]
+            .brightness_percent
+            .expect("built-in display should expose brightness");
         assert!(restored.abs_diff(original) <= 8);
     }
 }

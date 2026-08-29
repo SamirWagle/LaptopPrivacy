@@ -59,3 +59,19 @@
 - GitHub Markdown API accepted README in repository context; referenced icon and screenshot files exist.
 - Documentation branch validation passed: TypeScript type-check, 12 automated Rust tests, zero failures, 2 expected ignored GUI/hardware tests, and `git diff --check`.
 - Committed product README as `024f68b`, pushed only `docs-product-readme`, and opened stacked PR #5 against `feat/macos-native-overlays`. GitHub reports PR open and mergeable with zero configured checks; no merge or direct `main` push performed.
+
+## 2026-08-29
+
+- Refreshed GitHub state: PRs #1 through #6 had been merged and `main` was at `e9c25f1`; no open PR remained. Created `fix/review-correctness-blockers` from clean, current `main` before edits.
+- Confirmed all eight review findings in live source. No P0 condition found; four P1 and four P2 correctness defects required fixes before release.
+- Added red regressions for duplicate application matchers and hostname specificity. Both failed against previous behavior, then passed after Rust validation and specificity fixes.
+- Changed emergency removal to pause runtime config before cleanup, attempt overlay and brightness recovery independently, clear status, and persist paused state in native command.
+- Added overlay partial-apply rollback. Every touched overlay is tracked immediately; failure hides all tracked windows and leaves bookkeeping available for later recovery retries.
+- Restricted local-storage persistence to browser preview. Native failures now show errors and restore last confirmed UI config; backend rolls storage/runtime config back together if activation fails.
+- Disabled and labeled launch-at-login/global-shortcut controls as pending; onboarding and protection screen now direct users to working in-app recovery.
+- Added per-display supported/error reporting and partial-support UI. Added shared transactional brightness application with rollback across macOS, Windows, and Linux.
+- Added UI and Rust duplicate application-rule guards. Website matching now selects longest matching hostname before application fallback.
+- Automated validation passed: TypeScript build, 17 Rust tests, clippy with warnings denied, formatting, and diff checks. Two GUI/hardware tests remain ignored in normal suite by design.
+- Initial ignored-test run inside sandbox lacked WindowServer/display access. Re-ran serially with GUI/hardware permission: foreground/window discovery passed; physical brightness change-and-restore passed.
+- Windows cross-check remains environment-blocked before project compilation by missing `x86_64-w64-mingw32-windres`. Linux cross-check remains environment-blocked by absent cross-target GTK/GIO/Pango pkg-config sysroot; no platform runtime claim added.
+- Built unsigned release `Privacy Aperture.app`, launched release runtime successfully, stopped it with normal interrupt, and verified no `privacy-aperture` process remained.
