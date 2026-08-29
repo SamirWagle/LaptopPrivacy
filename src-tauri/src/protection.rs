@@ -11,27 +11,42 @@ use std::sync::{
 };
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
+const SELF_APP_ID: &str = "com.privacyaperture.desktop";
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtectionState {
+    Watching,
+    PrivacyActive,
+    PeekActive,
+    Paused,
+    Error,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ProtectionStatus {
+    pub state: ProtectionState,
     pub foreground_supported: bool,
     pub foreground_app: Option<ForegroundApplication>,
     pub matched_rule_id: Option<String>,
     pub matched_visibility_percent: Option<u8>,
     pub hardware_active: bool,
     pub overlay_active: bool,
+    pub last_error: Option<String>,
     pub message: String,
 }
 
 impl Default for ProtectionStatus {
     fn default() -> Self {
         Self {
+            state: ProtectionState::Watching,
             foreground_supported: foreground::supported(),
             foreground_app: None,
             matched_rule_id: None,
             matched_visibility_percent: None,
             hardware_active: false,
             overlay_active: false,
+            last_error: None,
             message: if foreground::supported() {
                 "Watching current foreground application locally".into()
             } else {
@@ -45,10 +60,14 @@ impl Default for ProtectionStatus {
 pub struct ProtectionRuntime(Arc<RuntimeInner>);
 
 struct RuntimeInner {
+    app: tauri::AppHandle,
     config: RwLock<AppConfig>,
     status: Mutex<ProtectionStatus>,
+    reported_error: Mutex<Option<String>>,
+    last_external_foreground: Mutex<Option<ForegroundApplication>>,
     brightness: BrightnessControl,
     overlay: OverlayControl,
+    peek_active: AtomicBool,
     stopped: AtomicBool,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -63,10 +82,14 @@ struct ProtectionTarget {
 impl ProtectionRuntime {
     pub fn new(config: AppConfig, app: tauri::AppHandle) -> Self {
         Self(Arc::new(RuntimeInner {
+            app: app.clone(),
             config: RwLock::new(config),
             status: Mutex::new(ProtectionStatus::default()),
+            reported_error: Mutex::new(None),
+            last_external_foreground: Mutex::new(None),
             brightness: BrightnessControl::default(),
             overlay: OverlayControl::new(app),
+            peek_active: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
             worker: Mutex::new(None),
         }))
@@ -105,6 +128,60 @@ impl ProtectionRuntime {
         }
         self.refresh();
         Ok(())
+    }
+
+    pub fn current_application(&self) -> Result<Option<ForegroundApplication>, String> {
+        let current = foreground::current()?;
+        match current {
+            Some(application) if application.platform_app_id != SELF_APP_ID => {
+                self.remember_external_application(&application)?;
+                Ok(Some(application))
+            }
+            Some(_) => self
+                .0
+                .last_external_foreground
+                .lock()
+                .map(|application| application.clone())
+                .map_err(|_| "foreground application state is unavailable".into()),
+            None => Ok(None),
+        }
+    }
+
+    pub fn peek_active(&self) -> bool {
+        self.0.peek_active.load(Ordering::Relaxed)
+    }
+
+    pub fn set_peek_active(&self, active: bool) -> Result<(), String> {
+        if active && !self.config()?.enabled {
+            return Err("Protection is paused; screen is already clear".into());
+        }
+        self.0.peek_active.store(active, Ordering::Relaxed);
+        if !active {
+            self.refresh();
+            return Ok(());
+        }
+        let overlay = self.0.overlay.clear();
+        let brightness = self.0.brightness.cancel();
+        match (overlay, brightness) {
+            (Ok(()), Ok(())) => {
+                self.set_status(ProtectionStatus {
+                    state: ProtectionState::PeekActive,
+                    foreground_supported: foreground::supported(),
+                    foreground_app: self.current_application().ok().flatten(),
+                    matched_rule_id: None,
+                    matched_visibility_percent: None,
+                    hardware_active: false,
+                    overlay_active: false,
+                    last_error: None,
+                    message: "Peek active; all dimming temporarily removed".into(),
+                });
+                Ok(())
+            }
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(overlay_error), Err(brightness_error)) => {
+                Err(format!("{overlay_error}; {brightness_error}"))
+            }
+        }
     }
 
     pub fn status(&self) -> Result<ProtectionStatus, String> {
@@ -146,15 +223,19 @@ impl ProtectionRuntime {
 
     pub fn remove_all_dimming(&self) -> Result<(), String> {
         pause_config(&self.0.config)?;
+        self.0.peek_active.store(false, Ordering::Relaxed);
         let overlay = self.0.overlay.clear();
         let brightness = self.0.brightness.cancel();
         if let Ok(mut status) = self.0.status.lock() {
+            status.state = ProtectionState::Paused;
             status.matched_rule_id = None;
             status.matched_visibility_percent = None;
             status.hardware_active = false;
             status.overlay_active = false;
+            status.last_error = None;
             status.message = "Protection paused; all dimming removed".into();
         }
+        crate::command_center::update_status(&self.0.app, ProtectionState::Paused);
         match (overlay, brightness) {
             (Ok(()), Ok(())) => Ok(()),
             (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
@@ -183,6 +264,15 @@ impl ProtectionRuntime {
                 return;
             }
         };
+        if let Some(application) = foreground
+            .as_ref()
+            .filter(|application| application.platform_app_id != SELF_APP_ID)
+        {
+            if let Err(error) = self.remember_external_application(application) {
+                self.set_error(error);
+                return;
+            }
+        }
         let config = match self.config() {
             Ok(config) => config,
             Err(error) => {
@@ -190,6 +280,10 @@ impl ProtectionRuntime {
                 return;
             }
         };
+        if self.peek_active() {
+            let _ = self.set_peek_active(true);
+            return;
+        }
         let target = foreground
             .as_ref()
             .and_then(|app| protection_target(&config, app));
@@ -211,51 +305,120 @@ impl ProtectionRuntime {
             }
             _ => self.0.overlay.reconcile(None, &[]),
         };
-        let (hardware_active, overlay_active, message) = match (brightness_result, overlay_result) {
-            (Ok(hardware_active), Ok(overlay_active)) => {
-                let message = if target.is_some() {
-                    match (hardware_active, overlay_active) {
-                        (true, true) => {
-                            "Protected application matched; overlay and hardware brightness active"
-                        }
-                        (true, false) => {
-                            "Protected application matched; hardware brightness active"
-                        }
-                        (false, true) => "Protected application matched; overlay active",
-                        (false, false) => "Protected application matched",
+        let (state, hardware_active, overlay_active, message) =
+            match (brightness_result, overlay_result) {
+                (Ok(hardware_active), Ok(overlay_active)) => {
+                    let (state, message) = if !config.enabled {
+                        (ProtectionState::Paused, "Protection paused")
+                    } else if target.is_some() {
+                        match (hardware_active, overlay_active) {
+                        (true, true) => (
+                            ProtectionState::PrivacyActive,
+                            "Protected application matched; overlay and hardware brightness active",
+                        ),
+                        (true, false) => (
+                            ProtectionState::PrivacyActive,
+                            "Protected application matched; hardware brightness active",
+                        ),
+                        (false, true) => (
+                            ProtectionState::PrivacyActive,
+                            "Protected application matched; overlay active",
+                        ),
+                        (false, false) => (
+                            ProtectionState::PrivacyActive,
+                            "Protected application matched",
+                        ),
                     }
-                } else {
-                    "No protected application matched"
-                };
-                (hardware_active, overlay_active, message.into())
-            }
-            (Err(error), Ok(overlay_active)) => (false, overlay_active, error),
-            (Ok(hardware_active), Err(error)) => (hardware_active, false, error),
-            (Err(brightness_error), Err(overlay_error)) => {
-                (false, false, format!("{brightness_error}; {overlay_error}"))
-            }
-        };
-        if let Ok(mut status) = self.0.status.lock() {
-            *status = ProtectionStatus {
-                foreground_supported: foreground::supported(),
-                foreground_app: foreground,
-                matched_rule_id: target.as_ref().map(|target| target.rule_id.clone()),
-                matched_visibility_percent: target.map(|target| target.visibility_percent),
-                hardware_active,
-                overlay_active,
-                message,
+                    } else {
+                        (
+                            ProtectionState::Watching,
+                            "No protected application matched",
+                        )
+                    };
+                    (state, hardware_active, overlay_active, message.into())
+                }
+                (Err(error), Ok(overlay_active)) => {
+                    (ProtectionState::Error, false, overlay_active, error)
+                }
+                (Ok(hardware_active), Err(error)) => {
+                    (ProtectionState::Error, hardware_active, false, error)
+                }
+                (Err(brightness_error), Err(overlay_error)) => (
+                    ProtectionState::Error,
+                    false,
+                    false,
+                    format!("{brightness_error}; {overlay_error}"),
+                ),
             };
-        }
+        let reported_error = self
+            .0
+            .reported_error
+            .lock()
+            .ok()
+            .and_then(|error| error.clone());
+        self.set_status(ProtectionStatus {
+            state: if reported_error.is_some() {
+                ProtectionState::Error
+            } else {
+                state
+            },
+            foreground_supported: foreground::supported(),
+            foreground_app: foreground,
+            matched_rule_id: target.as_ref().map(|target| target.rule_id.clone()),
+            matched_visibility_percent: target.map(|target| target.visibility_percent),
+            hardware_active,
+            overlay_active,
+            last_error: reported_error.clone(),
+            message: reported_error.unwrap_or(message),
+        });
     }
 
     fn set_error(&self, message: String) {
         let _ = self.0.brightness.clear_automatic();
         let _ = self.0.overlay.clear();
         if let Ok(mut status) = self.0.status.lock() {
+            status.state = ProtectionState::Error;
             status.hardware_active = false;
             status.overlay_active = false;
+            status.last_error = Some(message.clone());
             status.message = message;
         }
+        crate::command_center::update_status(&self.0.app, ProtectionState::Error);
+    }
+
+    pub fn report_error(&self, message: String) {
+        if let Ok(mut error) = self.0.reported_error.lock() {
+            *error = Some(message.clone());
+        }
+        self.set_error(message);
+    }
+
+    pub fn clear_reported_error(&self) {
+        if let Ok(mut error) = self.0.reported_error.lock() {
+            *error = None;
+        }
+        self.refresh();
+    }
+
+    fn set_status(&self, status: ProtectionStatus) {
+        let state = status.state;
+        if let Ok(mut current) = self.0.status.lock() {
+            *current = status;
+        }
+        crate::command_center::update_status(&self.0.app, state);
+    }
+
+    fn remember_external_application(
+        &self,
+        application: &ForegroundApplication,
+    ) -> Result<(), String> {
+        *self
+            .0
+            .last_external_foreground
+            .lock()
+            .map_err(|_| "foreground application state is unavailable")? =
+            Some(application.clone());
+        Ok(())
     }
 }
 

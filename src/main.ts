@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 
 type Page = "protection" | "applications" | "websites" | "settings";
@@ -50,13 +51,21 @@ interface ForegroundApplication {
 }
 
 interface ProtectionStatus {
+  state: "watching" | "privacy_active" | "peek_active" | "paused" | "error";
   foreground_supported: boolean;
   foreground_app: ForegroundApplication | null;
   matched_rule_id: string | null;
   matched_visibility_percent: number | null;
   hardware_active: boolean;
   overlay_active: boolean;
+  last_error: string | null;
   message: string;
+}
+
+interface QuickProtectResult {
+  config: AppConfig;
+  rule_id: string;
+  created: boolean;
 }
 
 const defaultConfig: AppConfig = {
@@ -85,12 +94,14 @@ const state = {
   brightness: { supported: false, displays: [], message: "Checking hardware brightness support…" } as BrightnessStatus,
   hardwareActive: false,
   protection: {
+    state: "watching",
     foreground_supported: false,
     foreground_app: null,
     matched_rule_id: null,
     matched_visibility_percent: null,
     hardware_active: false,
     overlay_active: false,
+    last_error: null,
     message: "Starting foreground protection…",
   } as ProtectionStatus,
   runningApplications: [] as ForegroundApplication[],
@@ -126,6 +137,7 @@ function navItem(page: Page, label: string): string {
 
 function shell(content: string): string {
   const adapterReady = state.protection.foreground_supported;
+  const statusLabel = state.protection.state === "privacy_active" ? "Protected" : state.protection.state === "peek_active" ? "Peek active" : state.protection.state === "paused" ? "Paused" : state.protection.state === "error" ? "Needs attention" : adapterReady ? "Watching" : "Setup mode";
   return `<div class="app-shell">
     <aside class="sidebar" aria-label="Main navigation">
       <div class="brand" aria-label="Privacy Aperture">
@@ -139,8 +151,8 @@ function shell(content: string): string {
         ${navItem("settings", "Settings")}
       </nav>
       <div class="rail-status">
-        <span class="status-dot ${adapterReady ? "" : "warning"}" aria-hidden="true"></span>
-        <span><b>${adapterReady ? "Foreground active" : "Setup mode"}</b><small>${adapterReady ? "App-window protection ready" : "Platform adapter pending"}</small></span>
+        <span class="status-dot ${adapterReady && state.protection.state !== "error" ? "" : "warning"}" aria-hidden="true"></span>
+        <span><b>${statusLabel}</b><small>${state.protection.state === "error" ? escapeHtml(state.protection.last_error ?? state.protection.message) : adapterReady ? "App-window protection ready" : "Platform adapter pending"}</small></span>
       </div>
     </aside>
     <main class="main-panel">${content}</main>
@@ -158,8 +170,10 @@ function pageHeader(eyebrow: string, title: string, description: string, action 
 
 function protectionPage(): string {
   const enabled = state.config.enabled;
+  const peekActive = state.protection.state === "peek_active";
   const foreground = state.protection.foreground_app;
   const matched = state.protection.matched_rule_id !== null;
+  const statusError = state.protection.state === "error";
   const visibility = state.protection.matched_visibility_percent ?? 100;
   const matchedRuleLabel = state.config.app_rules.find((rule) => rule.id === state.protection.matched_rule_id)?.display_name
     ?? state.config.site_rules.find((rule) => rule.id === state.protection.matched_rule_id)?.hostname
@@ -167,8 +181,10 @@ function protectionPage(): string {
     ?? "rule";
   return `${pageHeader(
     "Live protection",
-    enabled ? matched ? "Sensitive context protected" : "Protection is watching" : "Protection is paused",
-    enabled
+    peekActive ? "Peek is revealing your screen" : enabled ? matched ? "Sensitive context protected" : "Protection is watching" : "Protection is paused",
+    peekActive
+      ? "Release Peek shortcut or select End Peek to restore automatic protection."
+      : enabled
       ? state.protection.message
       : "No rule can dim your displays while protection is paused.",
     `<button class="power-button ${enabled ? "enabled" : ""}" id="toggle-protection" aria-pressed="${enabled}">
@@ -194,7 +210,7 @@ function protectionPage(): string {
     </article>
     <div class="status-stack">
       <article class="status-card">
-        <div class="status-heading"><span class="status-symbol protected" aria-hidden="true">✓</span><div><small>Rules engine</small><strong>${state.protection.overlay_active ? state.protection.hardware_active ? "Overlay + hardware active" : "Overlay active" : state.protection.hardware_active ? "Hardware dim active" : "Ready"}</strong></div></div>
+        <div class="status-heading"><span class="status-symbol ${statusError ? "warning" : "protected"}" aria-hidden="true">${statusError ? "!" : "✓"}</span><div><small>Rules engine</small><strong>${statusError ? "Needs attention" : state.protection.overlay_active ? state.protection.hardware_active ? "Overlay + hardware active" : "Overlay active" : state.protection.hardware_active ? "Hardware dim active" : "Ready"}</strong></div></div>
         <p>${state.config.app_rules.length + state.config.site_rules.length} local rule${state.config.app_rules.length + state.config.site_rules.length === 1 ? "" : "s"} configured</p>
       </article>
       <article class="status-card">
@@ -202,8 +218,8 @@ function protectionPage(): string {
         <p>Website context stays unavailable until native host is installed.</p>
       </article>
       <article class="status-card compact">
-        <div><small>Recovery control</small><strong class="key-combo">In app</strong></div>
-        <div class="compact-actions"><button class="text-button" id="preview-overlays">${state.overlayPreviewActive ? "Cancel preview" : "Preview current app"}</button><button class="text-button danger" id="remove-dim">Remove dim now</button></div>
+        <div><small>Command center</small><strong class="key-combo">⌘/Ctrl Shift 0</strong></div>
+        <div class="compact-actions"><button class="text-button" id="quick-protect">Protect current app</button><button class="text-button" id="peek" ${enabled ? "" : "disabled"}>${peekActive ? "End Peek" : "Peek"}</button><button class="text-button" id="preview-overlays">${state.overlayPreviewActive ? "Cancel preview" : "Preview current app"}</button><button class="text-button danger" id="remove-dim">Pause + clear</button></div>
       </article>
     </div>
   </section>
@@ -338,8 +354,8 @@ function settingsPage(): string {
     <div class="setting-row inset"><div><strong>Maximum privacy</strong><p>Use 10% app-window visibility and, only when global hardware mode is enabled, 10% entire-display brightness. Does not narrow panel viewing angle.</p></div><label class="switch"><input id="maximum-privacy" type="checkbox" ${state.config.maximum_privacy ? "checked" : ""} aria-label="Maximum privacy"><span></span></label></div>
   </section>
   <section class="settings-list">
-    <div class="setting-row"><div><strong>Launch at login</strong><p>Pending platform registration. Current build does not start automatically.</p></div><label class="switch"><input id="launch-at-login" type="checkbox" disabled aria-label="Launch at login unavailable"><span></span></label></div>
-    <div class="setting-row shortcut-setting"><div><strong>Global emergency shortcut</strong><p>Pending platform registration. Use Remove dim now inside app.</p></div><label><span class="sr-only">Emergency shortcut unavailable</span><input class="mono" id="shortcut" maxlength="80" value="${escapeHtml(state.config.emergency_shortcut)}" disabled></label></div>
+    <div class="setting-row"><div><strong>Launch at login</strong><p>Starts hidden in menu bar; protection continues without settings window.</p></div><label class="switch"><input id="launch-at-login" type="checkbox" ${state.config.launch_at_login ? "checked" : ""} aria-label="Launch Privacy Aperture at login"><span></span></label></div>
+    <div class="setting-row shortcut-setting"><div><strong>Global emergency shortcut</strong><p>Pauses protection, clears overlays, restores captured hardware brightness. Peek uses <span class="mono">CommandOrControl+Shift+Space</span>.</p></div><label><span class="sr-only">Emergency shortcut</span><input class="mono" id="shortcut" maxlength="80" value="${escapeHtml(state.config.emergency_shortcut)}"></label></div>
     <div class="setting-row"><div><strong>Theme</strong><p>Uses system light or dark appearance.</p></div><span class="setting-value">System</span></div>
   </section>
   <section class="settings-section"><h2>Connection</h2><div class="connection-card"><span class="status-symbol warning" aria-hidden="true">↗</span><div><strong>Chromium extension disconnected</strong><p>Native host registration ships with browser-integration milestone.</p></div><span class="pill warning">Offline</span></div></section>
@@ -354,7 +370,7 @@ function onboarding(): string {
     ["Choose how much stays visible.", "Move control to close aperture. Lower visibility creates darker protection."],
     ["Add your first application.", "Choose a running macOS app. Privacy Aperture stores only its stable bundle identifier and rule."],
     ["Protect browser hostnames.", "Chromium extension sends active hostname only. It never reads page content, titles, paths, or history."],
-    ["Keep recovery close.", "Use Remove dim now inside app. Global shortcut and launch-at-login registration are pending."],
+    ["Keep recovery close.", `Emergency shortcut ${state.config.emergency_shortcut} pauses protection and restores brightness. Peek uses CommandOrControl+Shift+Space. Launch at login stays optional.`],
   ][step - 1];
   const preview = step === 2 ? `<div class="onboarding-preview"><div class="mini-screen"><span>Private workspace</span><i style="opacity:${(100 - state.previewVisibility) / 100}"></i></div>${visibilityField(state.previewVisibility)}</div>` : `<div class="onboarding-art step-${step}"><span class="onboard-aperture"><i></i></span><small>${step === 1 ? "LOCAL ONLY" : step === 3 ? "APPLICATION ID" : step === 4 ? "HOSTNAME ONLY" : "IN-APP RECOVERY"}</small></div>`;
   return `<div class="onboarding-backdrop"><section class="onboarding" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
@@ -469,6 +485,8 @@ function bindEvents(): void {
     void persist(state.config.enabled ? "Protection enabled" : "Protection paused");
   });
   document.querySelector<HTMLButtonElement>("#remove-dim")?.addEventListener("click", () => void removeAllDimming());
+  document.querySelector<HTMLButtonElement>("#quick-protect")?.addEventListener("click", () => void quickProtect());
+  document.querySelector<HTMLButtonElement>("#peek")?.addEventListener("click", () => void togglePeek());
   document.querySelector<HTMLButtonElement>("#preview-overlays")?.addEventListener("click", () => void toggleOverlayPreview());
   document.querySelector<HTMLInputElement>("#hardware-enabled")?.addEventListener("change", (event) => {
     state.config.hardware_brightness_enabled = (event.currentTarget as HTMLInputElement).checked;
@@ -478,6 +496,8 @@ function bindEvents(): void {
     state.config.maximum_privacy = (event.currentTarget as HTMLInputElement).checked;
     void persist("Maximum privacy preference saved");
   });
+  document.querySelector<HTMLInputElement>("#launch-at-login")?.addEventListener("change", (event) => void updateLaunchAtLogin((event.currentTarget as HTMLInputElement).checked));
+  document.querySelector<HTMLInputElement>("#shortcut")?.addEventListener("change", (event) => void updateEmergencyShortcut((event.currentTarget as HTMLInputElement).value));
   bindHardwareLevel();
   document.querySelector<HTMLButtonElement>("#preview-hardware")?.addEventListener("click", () => void previewHardware());
   document.querySelector<HTMLButtonElement>("#apply-hardware")?.addEventListener("click", () => void applyHardware());
@@ -494,6 +514,64 @@ function bindEvents(): void {
     render();
   });
   document.querySelector<HTMLButtonElement>("#onboarding-skip")?.addEventListener("click", finishOnboarding);
+}
+
+async function quickProtect(): Promise<void> {
+  try {
+    const result = await invoke<QuickProtectResult>("protect_current_application");
+    state.config = result.config;
+    state.persistedConfig = structuredClone(result.config);
+    state.page = "applications";
+    state.addKind = "app";
+    state.editingId = result.rule_id;
+    state.savedMessage = result.created ? "Current application protected at 35% visibility" : "Existing application rule opened";
+  } catch (error) {
+    state.savedMessage = String(error);
+  }
+  render();
+  clearMessageLater();
+}
+
+async function togglePeek(): Promise<void> {
+  const active = state.protection.state !== "peek_active";
+  try {
+    await invoke("set_peek_active", { active });
+    await refreshProtection(false);
+    state.savedMessage = active ? "Peek active; all dimming removed" : "Automatic protection restored";
+  } catch (error) {
+    state.savedMessage = String(error);
+  }
+  render();
+  clearMessageLater();
+}
+
+async function updateLaunchAtLogin(enabled: boolean): Promise<void> {
+  try {
+    const config = await invoke<AppConfig>("set_launch_at_login", { enabled });
+    state.config = config;
+    state.persistedConfig = structuredClone(config);
+    state.savedMessage = enabled ? "Launch at login enabled" : "Launch at login disabled";
+  } catch (error) {
+    state.config = structuredClone(state.persistedConfig);
+    state.savedMessage = `Could not update launch at login: ${String(error)}`;
+  }
+  render();
+  clearMessageLater();
+}
+
+async function updateEmergencyShortcut(value: string): Promise<void> {
+  const emergencyShortcut = value.trim();
+  try {
+    const config = await invoke<AppConfig>("register_shortcuts", { emergencyShortcut });
+    state.config = config;
+    state.persistedConfig = structuredClone(config);
+    state.savedMessage = "Emergency shortcut registered";
+  } catch (error) {
+    state.config = structuredClone(state.persistedConfig);
+    state.savedMessage = `Shortcut unchanged: ${String(error)}`;
+  }
+  render();
+  clearMessageLater();
 }
 
 async function removeAllDimming(): Promise<void> {
@@ -587,12 +665,14 @@ async function refreshProtection(renderAfter = true): Promise<void> {
     if (renderAfter && changed && state.page === "protection" && !state.onboardingStep) render();
   } catch {
     state.protection = {
+      state: "error",
       foreground_supported: false,
       foreground_app: null,
       matched_rule_id: null,
       matched_visibility_percent: null,
       hardware_active: false,
       overlay_active: false,
+      last_error: "Foreground protection requires desktop app",
       message: "Foreground protection requires desktop app",
     };
   }
@@ -708,6 +788,29 @@ function finishOnboarding(): void {
 }
 
 async function boot(): Promise<void> {
+  if (nativeRuntime) {
+    await listen<AppConfig>("command-center:config-changed", (event) => {
+      state.config = event.payload;
+      state.persistedConfig = structuredClone(event.payload);
+      render();
+    });
+    await listen<string>("command-center:edit-application", async (event) => {
+      const loaded = await invoke<AppConfig>("load_config");
+      state.config = loaded;
+      state.persistedConfig = structuredClone(loaded);
+      state.page = "applications";
+      state.addKind = "app";
+      state.editingId = event.payload;
+      render();
+    });
+    await listen("command-center:refresh", async () => {
+      const loaded = await invoke<AppConfig>("load_config");
+      state.config = loaded;
+      state.persistedConfig = structuredClone(loaded);
+      await refreshProtection(false);
+      render();
+    });
+  }
   if (!nativeRuntime) {
     const preview = localStorage.getItem("privacy-aperture-preview-config");
     if (preview) {
