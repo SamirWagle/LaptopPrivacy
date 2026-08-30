@@ -83,3 +83,11 @@
 - Reuse the same eligible-window scanner for privacy overlay bounds so picker and protection semantics cannot drift.
 - Preserve `current()` as direct `NSWorkspace.frontmostApplication` lookup; picker filtering must not change runtime foreground detection.
 - Keep collection local to process IDs, bundle identifiers, display names, and geometry. Never read window titles, content, URLs, screenshots, or Accessibility text.
+
+## 2026-08-30 — pnpm and README capability sync
+
+- Work on `chore/pnpm-readme-sync` from fetched `origin/main` after PR #11 merged; never merge or push directly to `main`.
+- Document picker as visible-standard-window-only. State excluded background processes and temporary absence of hidden, minimized, and other-Space apps; retain manual bundle-ID path.
+- Move merged menu-bar, Peek, launch-at-login, emergency-shortcut, and single-instance behavior from roadmap into current capabilities.
+- Move Focus and settings UI ahead of Chromium and signed distribution, matching locked direct-main implementation sequence. Describe Focus as fallback dimming around the frontmost window, never as replacement for privacy-rule targeting.
+- Use pnpm exclusively in contributor and Tauri lifecycle commands, pin pnpm 11.22.0, commit its lock/workspace policy, and remove npm lockfile plus stale feature-branch clone instructions.

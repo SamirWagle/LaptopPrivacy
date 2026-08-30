@@ -107,3 +107,15 @@
 - Relabeled picker to `Visible application` / `Choose visible app…`. Preserved manual bundle-ID fields and unchanged foreground `current()` behavior.
 - Validation passed: 26 Rust tests with 2 expected GUI/hardware ignores, clippy with warnings denied, formatting, diff checks, and the production frontend build through pnpm. Pnpm migration files stayed outside this focused feature diff.
 - Active macOS desktop integration test passed for foreground identity, filtered running applications, and standard-window bounds. Visual picker inspection remains manual; no UI screenshot claim added.
+
+## 2026-08-30
+
+- Confirmed PR #11 merged and fetched `origin/main` at `2c02ba8` before creating `docs/readme-current-capabilities`.
+- Updated README picker behavior to match eligible on-screen standard-window filtering and documented that most helpers, extensions, and agents are excluded when they own no eligible window.
+- Documented merged menu-bar command center, Peek, launch-at-login, emergency shortcut, cleanup-first quit, and single-instance settings restore as current capabilities; removed their stale roadmap entries.
+- Corrected Focus wording and restored roadmap order: Focus, settings UI V2, Chromium, then signed distribution.
+- Replaced stale feature-branch clone and every npm command with direct-main clone and pnpm commands. Updated Tauri lifecycle hooks, pinned pnpm 11.22.0, adopted pnpm lock/workspace policy, and removed npm lockfile.
+- Independent review found and resolved four P2 truth gaps: overbroad helper exclusion, npm-backed Tauri hooks, incorrect Focus behavior/order, and understated Vite Node.js minimum.
+- `pnpm install --frozen-lockfile`, `pnpm build`, and `pnpm tauri build --no-bundle` passed. Tauri output confirmed `beforeBuildCommand` runs `pnpm build` and produced release binary.
+- Sandboxed `pnpm check` passed TypeScript but blocked two existing Unix-socket tests with `Operation not permitted`; permitted rerun passed 26 Rust tests with 2 expected GUI/hardware ignores.
+- `git diff --check` passed; README stale npm/feature-branch/picker wording scan found no current-instruction regressions.
