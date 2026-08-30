@@ -36,10 +36,14 @@ No account. No cloud. No telemetry. No screen capture.
 |---|---|
 | **App-window dimming** | Dims only visible windows belonging to matched macOS app. Surrounding desktop and other apps stay bright. |
 | **Real hardware brightness** | Optional panel control at same physical level changed by Mac brightness keys. Disabled by default because hardware brightness affects whole display. |
-| **Automatic rules** | Select running app, choose 10–100% visibility, then let foreground changes apply and restore protection. |
+| **Automatic rules** | Select an app that currently owns a visible standard window, choose 10–100% visibility, then let foreground changes apply and restore protection. |
+| **Menu-bar command center** | Protect Current App, Peek, Pause/Resume, open settings, or quit with overlay and brightness cleanup. Closing settings keeps protection running. |
+| **Startup and recovery** | Optional launch at login plus configurable global emergency shortcut. A second launch restores the existing settings window instead of starting another runtime. |
 | **Maximum privacy** | Uses 10% app-window visibility and, when hardware mode is enabled, 10% panel brightness. This is not optical side-view blocking. |
 | **Emergency recovery** | Pause protection or restore captured hardware brightness immediately. Three-second preview restores automatically. |
 | **Local rule storage** | Versioned JSON stores user-created app IDs, hostnames, and visibility settings—nothing else. |
+
+The application picker excludes processes without eligible on-screen windows, including most background helpers, extensions, and agents. Hidden, minimized, or other-Space apps appear after they own a visible standard window. Manual bundle-ID entry remains available.
 
 ### Two controls, two different jobs
 
@@ -56,7 +60,7 @@ This distinction matters: software overlays can target one app; physical brightn
 
 - No account, cloud sync, telemetry, ads, or network service.
 - No page content, browsing history, window titles, full URLs, screenshots, or activity history.
-- macOS app matching uses bundle identity. Window placement uses process ID and bounds only.
+- macOS app matching uses bundle identity. Picker eligibility and window placement use process ID and bounds only.
 - Active browser context will remain memory-only and clear on disconnect.
 - Product reduces casual shoulder-surfing. It cannot stop cameras, screenshots, close viewing, or replace physical privacy-filter hardware.
 
@@ -78,14 +82,14 @@ Galaxy S26 Ultra Privacy display narrows viewing angles using dedicated panel ha
 
 > Signed public download does not exist yet. Current build is developer prototype. First release target: signed, notarized macOS DMG.
 
-Requirements: Node.js 20+, Rust stable, and [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/).
+Requirements: Node.js 20.19+ or Node.js 22.12+, pnpm 11+, Rust stable, and [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
-git clone --branch feat/macos-native-overlays https://github.com/SamirWagle/LaptopPrivacy.git
+git clone https://github.com/SamirWagle/LaptopPrivacy.git
 cd LaptopPrivacy
-npm install
-npm run check
-npm run tauri dev
+pnpm install
+pnpm check
+pnpm tauri dev
 ```
 
 Need release instead of source build? Watch [GitHub Releases](https://github.com/SamirWagle/LaptopPrivacy/releases); first signed build will appear there.
@@ -94,14 +98,13 @@ Need release instead of source build? Watch [GitHub Releases](https://github.com
 
 ### Ship next
 
-- **Signed macOS DMG + auto-update** — safe two-click install, biggest download blocker.
-- **Menu-bar control + global Peek shortcut** — protect current app or temporarily reveal it without opening settings.
-- **Launch at login + emergency shortcut** — protection available after every restart with instant recovery.
+- **Focused-window mode** — when no privacy rule matches, keep the active front window bright and dim the surrounding desktop. Optional and off by default.
+- **Settings UI V2** — clearer Protection, Applications, Websites, Focus, and Settings sections with onboarding and accessible live previews.
 - **Chromium extension** — protect current hostname without content scripts or page injection.
+- **Signed macOS DMG + auto-update** — safe two-click install after browser integration and release checks are complete.
 
 ### Then
 
-- **Focused-window mode** — choose one active window instead of every window owned by protected app.
 - **Per-display profiles** — keep trusted display bright while dimming public-facing display.
 - **Rule presets** — Finance, Messages, Work, and Maximum Privacy starting points.
 - **Windows 10/11 and Linux X11 validation** — real-device overlay, brightness, packaging, and recovery tests.
@@ -116,7 +119,7 @@ Need release instead of source build? Watch [GitHub Releases](https://github.com
 ## Development checks
 
 ```sh
-npm run build
+pnpm build
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
